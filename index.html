@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iPrime Presentation Tool</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      background: #0e0e1a;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    .home-title {
+      color: #c8c8e0;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .home-subtitle {
+      color: #555570;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      margin-bottom: 48px;
+    }
+    .home-buttons {
+      display: flex;
+      gap: 24px;
+    }
+    .home-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 180px;
+      height: 140px;
+      background: #1a1a2e;
+      border: 1px solid #2a2a42;
+      border-radius: 12px;
+      color: #c8c8e0;
+      text-decoration: none;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 600;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      cursor: pointer;
+    }
+    .home-btn:hover {
+      background: #22223a;
+      border-color: #5050a0;
+      color: #fff;
+    }
+    .home-btn .btn-icon {
+      font-size: 36px;
+      margin-bottom: 14px;
+      line-height: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="home-title">iPrime Presentation Tool</div>
+  <div class="home-subtitle">AGV Layout &amp; Animation Suite</div>
+  <div class="home-buttons">
+    <a class="home-btn" href="cpicker.html">
+      <span class="btn-icon">📍</span>
+      Coord Picker
+    </a>
+    <a class="home-btn" href="animplayer.html">
+      <span class="btn-icon">▶</span>
+      Anim Player
+    </a>
+  </div>
+</body>
+</html>
