@@ -16,42 +16,43 @@
       background: #f0f0f8;
     }
     .home-title {
-      font-size: 15px;
+      font-size: 22px;
       font-weight: bold;
       letter-spacing: 0.1em;
       text-transform: uppercase;
       color: #1a1a2a;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
     }
     .home-subtitle {
-      font-size: 11px;
+      font-size: 16px;
       color: #9090a8;
       letter-spacing: 0.06em;
-      margin-bottom: 36px;
+      margin-bottom: 40px;
     }
     .home-buttons {
       display: flex;
-      gap: 16px;
+      gap: 20px;
     }
     .home-btn {
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      width: 160px;
-      height: 120px;
+      width: 220px;
+      height: 180px;
       background: #ffffff;
       border: 1px solid #c0c0cc;
       border-radius: 6px;
       color: #1a1a2a;
       text-decoration: none;
       font-family: monospace;
-      font-size: 12px;
+      font-size: 18px;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       font-weight: bold;
       cursor: pointer;
       transition: border-color 0.12s, color 0.12s, background 0.12s;
+      padding: 20px 16px;
     }
     .home-btn:hover {
       border-color: #4080e0;
@@ -59,9 +60,22 @@
       background: #ddeeff;
     }
     .home-btn .btn-icon {
-      font-size: 28px;
-      margin-bottom: 12px;
+      font-size: 36px;
+      margin-bottom: 10px;
       line-height: 1;
+    }
+    .home-btn .btn-desc {
+      font-size: 11px;
+      font-weight: normal;
+      text-transform: none;
+      letter-spacing: 0.02em;
+      color: #9090a8;
+      margin-top: 8px;
+      text-align: center;
+      line-height: 1.5;
+    }
+    .home-btn:hover .btn-desc {
+      color: #5070b0;
     }
   </style>
 </head>
@@ -71,11 +85,13 @@
   <div class="home-buttons">
     <a class="home-btn" href="cpicker.html">
       <span class="btn-icon">📍</span>
-      Coord Picker
+      COORDINATE PICKER
+      <span class="btn-desc">Place nodes, define waypoints,<br>and build AGV sequences</span>
     </a>
     <a class="home-btn" href="animplayer.html">
       <span class="btn-icon">▶</span>
-      Anim Player
+      ANIMATION PLAYER
+      <span class="btn-desc">Load a layout and play back<br>AGV movement sequences</span>
     </a>
   </div>
 </body>
