@@ -48,6 +48,21 @@
     <button id="homeBtn">Home</button>
   </div>
 
+  <!-- Details bar (after angle selection: dwell, label, mode) -->
+  <div id="detailsBar">
+    <span class="details-label">Dwell (s)</span>
+    <input type="number" id="dwellInput" placeholder="default" min="0" step="0.5">
+    <div class="details-sep"></div>
+    <span class="details-label">Label</span>
+    <input type="text" id="labelInput" placeholder="optional">
+    <div class="details-sep"></div>
+    <label id="detailsModeLabel">
+      <input type="checkbox" id="modeManual"> manual
+    </label>
+    <div class="details-sep"></div>
+    <span class="details-hint">Enter=add &nbsp;·&nbsp; Esc=cancel</span>
+  </div>
+
   <!-- Inline name input bar (seq_point naming step) -->
   <div id="nameInputBar">
     <span class="name-input-label">Node name</span>

@@ -57,7 +57,9 @@ const walker = {
   actionTimer:  0,
 };
 
-function actionDurationFor(action) {
+function actionDurationFor(seqE) {
+  if (seqE.dwell !== undefined) return seqE.dwell;
+  const action = seqE.action;
   if (action === 'move')     return 0;
   if (action === 'exchange') return state.actionDuration * 2;
   return state.actionDuration;
@@ -103,13 +105,14 @@ function updateWalker(dt) {
   if (walker.phase === 'idle' || walker.phase === 'done') return;
 
   if (walker.phase === 'action_pause') {
-    const action   = state.sequence[walker.currentStep].action;
-    const duration = actionDurationFor(action);
+    const seqE     = state.sequence[walker.currentStep];
+    const action   = seqE.action;
+    const duration = actionDurationFor(seqE);
     walker.actionTimer += dt;
 
     if (walker.actionTimer >= duration) {
       // Apply effect and advance
-      const nodeId  = state.sequence[walker.currentStep].node;
+      const nodeId  = seqE.node;
       const nodePt  = state.nodes[nodeId];
       if (nodePt) applyActionEffect(action, nodePt);
 
@@ -424,7 +427,7 @@ function drawRoundRect(x, y, w, h, r, fill, stroke) {
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
 }
 
-function drawActionIndicator(sx, sy, action, progress) {
+function drawActionIndicator(sx, sy, action, progress, label) {
   const col = ACTION_COLORS[action];
   if (!col) return;
 
@@ -438,12 +441,79 @@ function drawActionIndicator(sx, sy, action, progress) {
   ctx.lineCap     = 'round';
   ctx.stroke();
 
-  // Text label above AGV
+  // Action name above AGV
   ctx.fillStyle    = col;
   ctx.font         = 'bold 11px monospace';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'bottom';
   ctx.fillText(action.toUpperCase(), sx, sy - AGV_SIZE / 2 - 14);
+
+  // Optional custom label below action name
+  if (label) {
+    ctx.font      = '10px monospace';
+    ctx.fillStyle = col;
+    ctx.fillText(label.toUpperCase(), sx, sy - AGV_SIZE / 2 - 3);
+  }
+}
+
+// Dwell annotation for move-with-dwell stops (Feature 3)
+function drawDwellAnnotation(sx, sy, label, progress) {
+  const col = '#4080e0';
+  const startAngle = -Math.PI / 2;
+  const endAngle   = startAngle + 2 * Math.PI * Math.min(progress, 1);
+  ctx.beginPath();
+  ctx.arc(sx, sy, AGV_SIZE / 2 + 10, startAngle, endAngle);
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = 2;
+  ctx.lineCap     = 'round';
+  ctx.stroke();
+
+  ctx.fillStyle    = col;
+  ctx.font         = '10px monospace';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(label.toUpperCase(), sx, sy - AGV_SIZE / 2 - 14);
+}
+
+// Stick figure person for manual trolley operations (Feature 4)
+function drawPerson(sx, sy, heading) {
+  const perpAngle = ((heading + 90) * Math.PI) / 180;
+  const offset    = AGV_SIZE + 18;
+  const px = sx + offset * Math.cos(perpAngle);
+  const py = sy + offset * Math.sin(perpAngle);
+
+  ctx.save();
+  ctx.strokeStyle = '#2060c0';
+  ctx.fillStyle   = '#2060c0';
+  ctx.lineWidth   = 2;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+
+  // Head
+  ctx.beginPath();
+  ctx.arc(px, py - 12, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(px, py - 7);
+  ctx.lineTo(px, py + 3);
+  ctx.stroke();
+  // Arms (reaching toward AGV side)
+  ctx.beginPath();
+  ctx.moveTo(px - 7, py - 3);
+  ctx.lineTo(px + 7, py - 3);
+  ctx.stroke();
+  // Legs
+  ctx.beginPath();
+  ctx.moveTo(px, py + 3);
+  ctx.lineTo(px - 5, py + 13);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(px, py + 3);
+  ctx.lineTo(px + 5, py + 13);
+  ctx.stroke();
+
+  ctx.restore();
 }
 
 // heading in degrees — trolley is drawn rotated so its long axis aligns with travel direction
@@ -504,19 +574,27 @@ function drawScene(timestamp) {
     drawGrid(ctx, state.imgW, state.imgH, state.view);
   }
 
-  // Sequence path lines
+  // Sequence path lines — colored by load state (Feature 1)
   const validSeq = state.sequence.filter(e => state.nodes[e.node]);
   if (validSeq.length > 1) {
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255,100,200,0.5)';
-    ctx.lineWidth   = 2;
-    ctx.setLineDash([6, 4]);
-    validSeq.forEach(({ node }, i) => {
-      const pt      = state.nodes[node];
-      const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-    });
-    ctx.stroke();
+    let carrying = false;
+    for (let i = 0; i < validSeq.length - 1; i++) {
+      const a = validSeq[i].action;
+      if (a === 'pickup')   carrying = true;
+      if (a === 'release')  carrying = false;
+      if (a === 'exchange') carrying = true;
+      const ptA = state.nodes[validSeq[i].node];
+      const ptB = state.nodes[validSeq[i + 1].node];
+      const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
+      const { sx: bx, sy: by } = imgToScreen(ptB.x, ptB.y, state.view);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.strokeStyle = carrying ? 'rgba(244,162,97,0.75)' : 'rgba(180,160,200,0.55)';
+      ctx.lineWidth   = carrying ? 3 : 2;
+      ctx.setLineDash(carrying ? [] : [6, 4]);
+      ctx.stroke();
+    }
     ctx.setLineDash([]);
   }
 
@@ -603,13 +681,19 @@ function drawScene(timestamp) {
 
     drawAGV(ax, ay, walker.agvHeading);
 
-    // Action indicator during pause
+    // Action indicator during pause (Features 3 & 4)
     if (walker.phase === 'action_pause') {
-      const action   = state.sequence[walker.currentStep]?.action;
-      const duration = actionDurationFor(action);
-      if (action && action !== 'move' && duration > 0) {
+      const seqE     = state.sequence[walker.currentStep];
+      const action   = seqE?.action;
+      const duration = actionDurationFor(seqE || { action: 'move' });
+      if (action && duration > 0) {
         const progress = walker.actionTimer / duration;
-        drawActionIndicator(ax, ay, action, progress);
+        if (action !== 'move') {
+          drawActionIndicator(ax, ay, action, progress, seqE?.label);
+          if (seqE?.mode === 'manual') drawPerson(ax, ay, walker.agvHeading);
+        } else {
+          drawDwellAnnotation(ax, ay, seqE?.label || 'WAIT', progress);
+        }
       }
     }
   }

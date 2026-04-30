@@ -223,6 +223,12 @@ dialog input[type="file"] {
   padding: 4px 10px;
   border-bottom: 1px solid #f0f0f8;
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.seq-entry-row {
+  display: flex;
   gap: 6px;
   align-items: center;
 }
@@ -545,6 +551,107 @@ dialog input[type="file"] {
   white-space: nowrap;
 }
 
+
+/* ── Details bar (cpicker — dwell / label / mode input) ─────────────── */
+
+#detailsBar {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  align-items: center;
+  gap: 10px;
+  z-index: 300;
+  background: rgba(255,255,255,0.97);
+  border: 1.5px solid #cc44aa;
+  border-radius: 8px;
+  padding: 8px 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  white-space: nowrap;
+  pointer-events: all;
+}
+
+.details-sep {
+  width: 1px;
+  height: 18px;
+  background: #e0d0e8;
+  flex-shrink: 0;
+}
+
+.details-label {
+  font-size: 10px;
+  color: #9090a8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#detailsBar input[type="number"],
+#detailsBar input[type="text"] {
+  font-family: monospace;
+  font-size: 12px;
+  border: 1px solid #c0c0cc;
+  border-radius: 4px;
+  padding: 3px 6px;
+  outline: none;
+  background: #f8f8fc;
+  color: #1a1a2a;
+}
+#detailsBar input[type="number"] { width: 64px; }
+#detailsBar input[type="text"]   { width: 110px; }
+#detailsBar input[type="number"]:focus,
+#detailsBar input[type="text"]:focus { border-color: #cc44aa; }
+
+#detailsModeLabel {
+  font-size: 11px;
+  color: #505060;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.details-hint { font-size: 10px; color: #b0b0c0; }
+
+/* ── Sequence panel extras (dwell / label / mode badges) ─────────────── */
+
+.seq-extras {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding-left: 26px;
+  padding-bottom: 2px;
+}
+
+.seq-dwell {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #1050c0;
+  background: #e8f0ff;
+  border: 1px solid #a0b8f0;
+  white-space: nowrap;
+}
+
+.seq-manual {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: #8030c0;
+  background: #f0e8ff;
+  border: 1px solid #c090f0;
+  white-space: nowrap;
+}
+
+.seq-lbl {
+  font-size: 10px;
+  color: #808090;
+  white-space: nowrap;
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
 
 /* ── Home button (HUD inline — cpicker) ─────────────────────────────── */
 

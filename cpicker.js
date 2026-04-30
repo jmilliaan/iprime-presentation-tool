@@ -43,6 +43,7 @@ const seqEntry = {
   pending: false,
   nodeId:  null,
   action:  null,
+  heading: 0,
 };
 
 // ── DOM references ────────────────────────────────────────────────────────
@@ -66,6 +67,11 @@ const loadJsonInput     = document.getElementById('loadJsonInput');
 const loadImgInput      = document.getElementById('loadImgInput');
 const nameInputBar      = document.getElementById('nameInputBar');
 const nameInput         = document.getElementById('nameInput');
+const detailsBar        = document.getElementById('detailsBar');
+const dwellInput        = document.getElementById('dwellInput');
+const labelInput        = document.getElementById('labelInput');
+const modeManual        = document.getElementById('modeManual');
+const detailsModeLabel  = document.getElementById('detailsModeLabel');
 
 // ── Canvas resize (DPR-aware) ─────────────────────────────────────────────
 
@@ -178,6 +184,51 @@ function closeRadial() {
   hideNameInput();
 }
 
+// ── Details bar (dwell / label / mode — shown after angle selection) ──────
+
+function showDetailsBar() {
+  dwellInput.value   = '';
+  labelInput.value   = '';
+  modeManual.checked = false;
+  // manual toggle only makes sense for trolley actions
+  detailsModeLabel.style.display =
+    ['pickup', 'release', 'exchange'].includes(seqEntry.action) ? 'flex' : 'none';
+  detailsBar.style.display = 'flex';
+  requestAnimationFrame(() => dwellInput.focus());
+}
+
+function hideDetailsBar() {
+  detailsBar.style.display = 'none';
+  seqEntry.pending = false;
+  seqEntry.nodeId  = null;
+  seqEntry.action  = null;
+  seqEntry.heading = 0;
+}
+
+function submitDetailsBar() {
+  const dwell = parseFloat(dwellInput.value);
+  const label = labelInput.value.trim();
+  const entry = {
+    node:    seqEntry.nodeId,
+    action:  seqEntry.action,
+    heading: seqEntry.heading,
+  };
+  if (isFinite(dwell) && dwell >= 0) entry.dwell = dwell;
+  if (label) entry.label = label;
+  if (modeManual.checked) entry.mode = 'manual';
+  state.sequence.push(entry);
+  hideDetailsBar();
+  updateSeqPanel();
+}
+
+[dwellInput, labelInput].forEach(input => {
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') submitDetailsBar();
+    if (e.key === 'Escape') hideDetailsBar();
+  });
+});
+
 function selectType(type) {
   if (type === 'waypoint') {
     // Auto-name and save immediately — no angle prompt
@@ -207,13 +258,9 @@ function openSeqAngleRadial(nodeId, action, cx, cy) {
 }
 
 function selectSeqAngle(sectorIdx) {
-  state.sequence.push({
-    node:    seqEntry.nodeId,
-    action:  seqEntry.action,
-    heading: sectorIdx * 45,
-  });
+  seqEntry.heading = sectorIdx * 45;
   closeRadial();
-  updateSeqPanel();
+  showDetailsBar();
 }
 
 // ── Sector detection ──────────────────────────────────────────────────────
@@ -294,6 +341,9 @@ function hideActionPicker() {
 }
 
 document.addEventListener('mousedown', (e) => {
+  if (detailsBar.style.display === 'flex' && !detailsBar.contains(e.target)) {
+    hideDetailsBar();
+  }
   if (actionPicker.style.display === 'flex' && !actionPicker.contains(e.target)) {
     hideActionPicker();
     seqEntry.pending = false;
@@ -543,14 +593,25 @@ function updateSeqPanel() {
   seqPanel.style.display = state.sequence.length > 0 ? 'block' : 'none';
   seqPanelTitle.textContent = `SEQUENCE (${state.sequence.length})`;
   seqList.innerHTML = '';
-  state.sequence.forEach(({ node, action, heading }, i) => {
+  state.sequence.forEach(({ node, action, heading, dwell, label, mode }, i) => {
     const row = document.createElement('div');
     row.className = 'seq-entry';
+    let extras = '';
+    if (dwell !== undefined || label || mode === 'manual') {
+      extras = '<div class="seq-extras">';
+      if (dwell !== undefined) extras += `<span class="seq-dwell">${dwell}s</span>`;
+      if (label) extras += `<span class="seq-lbl" title="${label}">${label}</span>`;
+      if (mode === 'manual') extras += `<span class="seq-manual">MAN</span>`;
+      extras += '</div>';
+    }
     row.innerHTML =
+      `<div class="seq-entry-row">` +
       `<span class="seq-idx">${i}</span>` +
       `<span class="seq-node">${node}</span>` +
       `<span class="action-badge badge-${action}">${action}</span>` +
-      `<span class="seq-heading">${heading ?? 0}°</span>`;
+      `<span class="seq-heading">${heading ?? 0}°</span>` +
+      `</div>` +
+      extras;
     seqList.appendChild(row);
   });
 }
@@ -605,19 +666,26 @@ function drawLoop() {
     drawGrid(ctx, state.imgW, state.imgH, state.view);
   }
 
-  // Sequence path lines
+  // Sequence path lines — colored by load state (Feature 1)
   const validSeq = state.sequence.filter(e => state.nodes[e.node]);
   if (validSeq.length > 1) {
-    ctx.beginPath();
-    ctx.strokeStyle = COLORS.sequence_line;
-    ctx.lineWidth   = 2;
-    ctx.setLineDash([]);
-    validSeq.forEach(({ node }, i) => {
-      const pt = state.nodes[node];
-      const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
-    });
-    ctx.stroke();
+    let carrying = false;
+    for (let i = 0; i < validSeq.length - 1; i++) {
+      const a = validSeq[i].action;
+      if (a === 'pickup')   carrying = true;
+      if (a === 'release')  carrying = false;
+      if (a === 'exchange') carrying = true;
+      const ptA = state.nodes[validSeq[i].node];
+      const ptB = state.nodes[validSeq[i + 1].node];
+      const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
+      const { sx: bx, sy: by } = imgToScreen(ptB.x, ptB.y, state.view);
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.strokeStyle = carrying ? 'rgba(244,162,97,0.9)' : COLORS.sequence_line;
+      ctx.lineWidth   = carrying ? 3 : 2;
+      ctx.stroke();
+    }
   }
 
   // Sequence step labels + heading arrows
