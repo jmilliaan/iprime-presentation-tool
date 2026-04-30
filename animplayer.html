@@ -54,15 +54,36 @@
     <div class="toolbar-sep"></div>
     <span id="statusBadge" class="status-idle">IDLE</span>
     <span id="stepCounter">step 0 / 0</span>
-    <div style="margin-left:auto;">
+    <div style="margin-left:auto;display:flex;gap:6px;">
       <button id="btnRecord">⏺ Record</button>
+      <button id="homeBtn">⌂ Home</button>
     </div>
   </div>
 
-  <!-- Home button (bottom-right) -->
-  <a id="homeBtn" href="index.html" title="Home">⌂</a>
+  <!-- Home confirm dialog -->
+  <dialog id="homeConfirmModal">
+    <h2>Go back to Home?</h2>
+    <p style="font-size:13px;color:#505060;margin-bottom:20px;line-height:1.6;">
+      Any unsaved recording progress will be lost.
+    </p>
+    <div class="dialog-buttons">
+      <button id="homeCancel">Cancel</button>
+      <button class="primary" id="homeConfirm">Go to Home</button>
+    </div>
+  </dialog>
 
   <script src="shared.js"></script>
   <script src="animplayer.js"></script>
+  <script>
+    document.getElementById('homeBtn').addEventListener('click', function () {
+      document.getElementById('homeConfirmModal').showModal();
+    });
+    document.getElementById('homeCancel').addEventListener('click', function () {
+      document.getElementById('homeConfirmModal').close();
+    });
+    document.getElementById('homeConfirm').addEventListener('click', function () {
+      window.location.href = 'index.html';
+    });
+  </script>
 </body>
 </html>

@@ -45,6 +45,7 @@
     <span id="hudFile" class="dim">→ coords.json</span>
     <span class="dim">· [E] mode · [S] save · RClick=undo/cancel · Scroll=zoom · MMB=pan</span>
     <button id="clearBtn">Clear</button>
+    <button id="homeBtn">Home</button>
   </div>
 
   <!-- Inline name input bar (seq_point naming step) -->
@@ -90,10 +91,35 @@
     <button data-action="exchange">exchange — swap trolley</button>
   </div>
 
-  <!-- Home button (bottom-right) -->
-  <a id="homeBtn" href="index.html" title="Home">⌂</a>
+  <!-- Home confirm dialog -->
+  <dialog id="homeConfirmModal">
+    <h2>Go back to Home?</h2>
+    <p style="font-size:13px;color:#505060;margin-bottom:20px;line-height:1.6;">
+      You have unsaved work. Save your progress before leaving?
+    </p>
+    <div class="dialog-buttons">
+      <button id="homeCancel">Cancel</button>
+      <button id="homeLeave">Leave without saving</button>
+      <button class="primary" id="homeSave">Save &amp; go Home</button>
+    </div>
+  </dialog>
 
   <script src="shared.js"></script>
   <script src="cpicker.js"></script>
+  <script>
+    document.getElementById('homeBtn').addEventListener('click', function () {
+      document.getElementById('homeConfirmModal').showModal();
+    });
+    document.getElementById('homeCancel').addEventListener('click', function () {
+      document.getElementById('homeConfirmModal').close();
+    });
+    document.getElementById('homeLeave').addEventListener('click', function () {
+      window.location.href = 'index.html';
+    });
+    document.getElementById('homeSave').addEventListener('click', function () {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+      setTimeout(function () { window.location.href = 'index.html'; }, 300);
+    });
+  </script>
 </body>
 </html>
