@@ -1,0 +1,302 @@
+{
+  "feature": "Multi-AGV Sequence Support",
+  "description": "Allow multiple AGVs to be defined in a single layout JSON, each with its own independent sequence. All AGVs play back simultaneously in animplayer. Conflict detection warns when two AGVs occupy the same node at the same time. Fully client-side, no backend required.",
+
+  "context": {
+    "repo": "iprime-presentation-tool",
+    "stack": "Vanilla JS + HTML5 Canvas, no frameworks, no build step",
+    "existing_files": ["shared.js", "animplayer.js", "animplayer.html", "cpicker.js", "cpicker.html", "style.css"],
+    "prior_features_implemented": [
+      "Feature 1: path segment load-state coloring (orange=loaded, purple dashed=empty)",
+      "Feature 3: per-stop dwell time + label annotation on AGV during pause",
+      "Feature 4: manual mode with stick-figure person drawn during action_pause"
+    ],
+    "current_json_schema": {
+      "NODES": "{ [id: string]: { x: number, y: number, type: 'seq_point' | 'waypoint' } }",
+      "SEQUENCE": "Array of { node, action, heading, dwell?, label?, mode? }"
+    }
+  },
+
+  "new_json_schema": {
+    "description": "Replace top-level SEQUENCE with an AGVS array. NODES is unchanged.",
+    "NODES": "unchanged",
+    "AGVS": [
+      {
+        "id": "AGV-01",
+        "color": "#E63946",
+        "sequence": [
+          { "node": "HP-01", "action": "pickup", "heading": 0 }
+        ]
+      },
+      {
+        "id": "AGV-02",
+        "color": "#4080e0",
+        "sequence": [
+          { "node": "HP-02", "action": "move", "heading": 180 }
+        ]
+      }
+    ],
+    "backward_compatibility": "If AGVS key is absent but SEQUENCE exists, wrap it: AGVS = [{ id: 'AGV-01', color: '#E63946', sequence: data.SEQUENCE }]. This keeps all existing JSON files working without modification.",
+    "legacy_key": "Keep SEQUENCE as an alias on save ONLY IF there is exactly one AGV (for maximum compatibility with older files)."
+  },
+
+  "shared_js_changes": {
+    "normaliseSequence": "No change needed. Already handles dwell/label/mode via spread.",
+    "new_function_normaliseAGVS": {
+      "signature": "function normaliseAGVS(data)",
+      "description": "Accepts the parsed JSON object. Returns an array of AGV objects with normalised sequences.",
+      "logic": [
+        "If data.AGVS exists: return data.AGVS.map(agv => ({ ...agv, sequence: normaliseSequence(agv.sequence || []) }))",
+        "Else if data.SEQUENCE exists: return [{ id: 'AGV-01', color: '#E63946', sequence: normaliseSequence(data.SEQUENCE) }]",
+        "Else: return []"
+      ],
+      "place_after": "normaliseSequence function at bottom of shared.js"
+    },
+    "AGV_COLORS": {
+      "description": "Add a default color palette for auto-assigning colors to new AGVs in cpicker.",
+      "value": ["#E63946", "#4080e0", "#50DC78", "#F4A261", "#cc44aa", "#50C8FF", "#FFC832", "#a050e0"],
+      "place_at": "top of shared.js alongside COLORS constant"
+    }
+  },
+
+  "animplayer_js_changes": {
+    "state_object": {
+      "remove": "sequence: []  (top-level sequence is gone, sequences live on each walker)",
+      "add": "agvs: []   // array of AGV walker objects — see walker_schema below"
+    },
+    "walker_schema": {
+      "description": "Each AGV gets its own walker object. The existing singleton 'walker' const is replaced by state.agvs array.",
+      "fields": {
+        "id": "string — AGV identifier e.g. 'AGV-01'",
+        "color": "string — hex color for this AGV e.g. '#E63946'",
+        "sequence": "normalised sequence array (node/action/heading/dwell/label/mode)",
+        "currentStep": "number",
+        "agvPos": "{ x, y }",
+        "agvHeading": "number (degrees)",
+        "trolleyState": "'empty' | 'carrying'",
+        "trolleyPos": "{ x, y, heading } | null",
+        "phase": "'idle' | 'moving' | 'action_pause' | 'done'",
+        "actionTimer": "number"
+      }
+    },
+    "functions_to_modify": {
+      "resetWalker": {
+        "new_signature": "function resetWalker(w)",
+        "description": "Takes a walker object w instead of using the singleton. Resets w in-place using w.sequence. Called for each AGV on restart.",
+        "key_change": "Replace all references to 'walker.X' with 'w.X', replace 'state.sequence' with 'w.sequence'."
+      },
+      "updateWalker": {
+        "new_signature": "function updateWalker(w, dt)",
+        "description": "Takes walker w and dt. All internal references to 'walker' become 'w', all references to 'state.sequence' become 'w.sequence'.",
+        "note": "actionDurationFor(seqE) signature is unchanged — already refactored in Feature 3."
+      },
+      "applyActionEffect": {
+        "new_signature": "function applyActionEffect(action, nodePos, w)",
+        "description": "Takes walker w to mutate instead of the singleton walker.",
+        "key_change": "Replace 'walker.trolleyState' with 'w.trolleyState', 'walker.trolleyPos' with 'w.trolleyPos'."
+      },
+      "resetAllWalkers": {
+        "type": "new function",
+        "signature": "function resetAllWalkers()",
+        "body": "state.agvs.forEach(w => resetWalker(w)); state.elapsed = 0;"
+      },
+      "updateAllWalkers": {
+        "type": "new function",
+        "signature": "function updateAllWalkers(dt)",
+        "body": "state.agvs.forEach(w => { if (w.phase !== 'idle' && w.phase !== 'done') updateWalker(w, dt); });"
+      },
+      "allDone": {
+        "type": "new helper",
+        "signature": "function allDone()",
+        "body": "return state.agvs.length > 0 && state.agvs.every(w => w.phase === 'done');"
+      }
+    },
+    "tick_function_changes": {
+      "replace": "updateWalker(dt)  →  updateAllWalkers(dt)",
+      "replace2": "walker.phase === 'done'  →  allDone()",
+      "replace3": "resetWalker()  →  resetAllWalkers()"
+    },
+    "file_loading_changes": {
+      "loadJson_handler": [
+        "Parse JSON as before",
+        "state.nodes = data.NODES || {}",
+        "state.agvs  = normaliseAGVS(data).map(agv => makeWalker(agv))",
+        "Call resetAllWalkers()",
+        "Update loadStatus text: show number of AGVs and total sequence entries"
+      ],
+      "makeWalker_function": {
+        "type": "new function",
+        "signature": "function makeWalker(agvDef)",
+        "description": "Takes an AGV definition object {id, color, sequence} and returns a full walker object with all runtime fields initialised to defaults.",
+        "returns": "{ id, color, sequence, currentStep:0, agvPos:{x:0,y:0}, agvHeading:0, trolleyState:'empty', trolleyPos:null, phase:'idle', actionTimer:0 }"
+      }
+    },
+    "drawScene_changes": {
+      "sequence_path_lines": {
+        "description": "Draw path lines for ALL AGVs. Each AGV uses its own color for the loaded segment, and a lighter/transparent version for the empty segment.",
+        "loaded_segment_color": "agv.color with 0.75 alpha (solid)",
+        "empty_segment_color": "agv.color with 0.3 alpha (dashed [6,4])",
+        "note": "Load-state logic (Feature 1) is unchanged — just substitute agv.color instead of the hardcoded orange/purple."
+      },
+      "node_dots": "unchanged — nodes are shared across all AGVs",
+      "agv_rendering": {
+        "description": "Loop over state.agvs. For each AGV that is not idle, draw its trolley (if any) and AGV body using agv.color.",
+        "drawAGV_change": "Add optional color parameter: function drawAGV(sx, sy, heading, color). Replace hardcoded '#E63946' with the passed color.",
+        "drawTrolley_change": "No color change needed — trolley stays orange/amber as a universal trolley color.",
+        "hitch_color": "Use agv.color at 60% lightness for the hitch bar."
+      },
+      "action_indicator": "Per-AGV — already called inside the AGV rendering loop, no structural change needed.",
+      "conflict_detection": {
+        "when": "After all walkers are updated each tick (in updateAllWalkers or drawScene), check for conflicts.",
+        "how": [
+          "For each pair of walkers (i, j), check if both are in 'action_pause' phase at the same step node.",
+          "Conflict = state.nodes[w_i.sequence[w_i.currentStep].node] and state.nodes[w_j.sequence[w_j.currentStep].node] are the same node ID, OR their agvPos are within AGV_SIZE*2 pixels of each other.",
+          "Store conflict flags: Set<walkerIndex> of AGVs currently in conflict."
+        ],
+        "visual": "Draw a blinking red ring (radius AGV_SIZE + 16) around each AGV in conflict. Use state.elapsed for blink timing: opacity = 0.4 + 0.6 * Math.abs(Math.sin(state.elapsed * 4)).",
+        "conflict_helper": "function detectConflicts() — returns a Set of walker indices that are conflicting. Call once per drawScene after all walker positions are updated."
+      }
+    },
+    "hud_changes": {
+      "description": "Show per-AGV status in the canvas HUD bar at the bottom.",
+      "format": "AGV-01: MOVING  |  AGV-02: PICKUP  |  ...",
+      "truncate": "If more than 3 AGVs, show first 3 and '+ N more'",
+      "each_agv_status_color": "Use agv.color for that AGV's status text"
+    },
+    "toolbar_changes": {
+      "stepCounter": "Show 'AGV-01: step X/Y' for single AGV, or 'N AGVs active' for multi",
+      "statusBadge": "Show aggregate: IDLE / PLAYING / DONE based on all walkers"
+    }
+  },
+
+  "cpicker_js_changes": {
+    "state_object": {
+      "add": "agvs: [{ id: 'AGV-01', color: '#E63946', sequence: [] }]",
+      "add2": "activeAgvIdx: 0   // index into state.agvs — which AGV is currently being edited",
+      "remove": "sequence: []  (sequences now live on each agv object)",
+      "note": "All existing references to state.sequence must change to state.agvs[state.activeAgvIdx].sequence"
+    },
+    "sequence_references": {
+      "description": "Do a careful find-and-replace of ALL state.sequence references in cpicker.js.",
+      "pattern": "state.sequence  →  state.agvs[state.activeAgvIdx].sequence",
+      "occurrences_to_check": [
+        "loadJsonInput handler: state.sequence = normaliseSequence(...)",
+        "selectSeqAngle / submitDetailsBar: state.sequence.push(...)",
+        "contextmenu handler: state.sequence.pop()",
+        "updateSeqPanel: state.sequence.forEach(...)",
+        "saveJSON: SEQUENCE: state.sequence",
+        "confirmClearOk: state.sequence = []",
+        "drawLoop: validSeq = state.sequence.filter(...)"
+      ]
+    },
+    "agv_selector_panel": {
+      "html_element": "#agvPanel",
+      "position": "fixed, top: 40px, left: 10px (above the node list panel)",
+      "structure": [
+        "Panel title: 'AGVs (N)'",
+        "One row per AGV: color swatch + id label + sequence count badge",
+        "Active AGV row is highlighted with a border matching its color",
+        "[ + New AGV ] button at the bottom of the panel"
+      ],
+      "css_classes": [
+        ".agv-entry — flex row, cursor pointer, padding 4px 10px",
+        ".agv-entry.active — border-left: 3px solid agv.color (set via inline style)",
+        ".agv-swatch — 10x10px circle, background = agv.color",
+        ".agv-add-btn — styled like the existing clearBtn but blue"
+      ]
+    },
+    "agv_panel_logic": {
+      "click_agv_row": "Set state.activeAgvIdx = i; update panel; hide actionPicker; closeRadial()",
+      "click_add_agv": [
+        "Pick next color from AGV_COLORS (imported from shared.js) cycling by index",
+        "Auto-generate ID: 'AGV-0N' where N = state.agvs.length + 1",
+        "Push { id, color, sequence: [] } to state.agvs",
+        "Set state.activeAgvIdx = state.agvs.length - 1",
+        "Update panel"
+      ],
+      "update_function": "function updateAgvPanel() — rebuilds #agvPanel DOM, analogous to updateSeqPanel()"
+    },
+    "path_drawing_changes": {
+      "description": "In drawLoop, draw path lines for ALL AGVs, not just the active one.",
+      "active_agv": "Draw with full opacity using agv.color for loaded, lighter agv.color for empty (same load-state logic from Feature 1)",
+      "inactive_agvs": "Draw at 40% opacity so they don't compete visually with the active one",
+      "sequence_step_labels": "Each AGV uses its own color for step index labels"
+    },
+    "save_json_changes": {
+      "new_format": "{ NODES: state.nodes, AGVS: state.agvs.map(a => ({ id: a.id, color: a.color, sequence: a.sequence })) }",
+      "legacy_compat": "Also include SEQUENCE: state.agvs[0].sequence if state.agvs.length === 1, for backward compatibility with existing animplayer sessions"
+    },
+    "load_json_changes": {
+      "handler": [
+        "Use normaliseAGVS(data) from shared.js to get the agvs array",
+        "state.agvs = result.map(agv => ({ ...agv, sequence: normaliseSequence(agv.sequence) }))",
+        "state.activeAgvIdx = 0",
+        "If state.agvs is empty, initialise with one default AGV",
+        "Call updateAgvPanel(), updateSeqPanel(), updateNodeList()"
+      ]
+    },
+    "clear_changes": {
+      "confirmClearOk": "Reset state.agvs = [{ id: 'AGV-01', color: '#E63946', sequence: [] }]; state.activeAgvIdx = 0; updateAgvPanel();"
+    },
+    "updateSeqPanel_changes": {
+      "title": "Show active AGV id in title: 'SEQUENCE — AGV-01 (N)'",
+      "color": "Use state.agvs[state.activeAgvIdx].color for the panel border and title color instead of hardcoded #cc44aa"
+    },
+    "hud_changes": {
+      "hudCounts": "Show 'agvs: N | nodes: M | seq: K' where K is the active AGV's sequence length"
+    }
+  },
+
+  "cpicker_html_changes": {
+    "add": "<div id='agvPanel'></div> — placed before #nodeListPanel in the DOM"
+  },
+
+  "style_css_changes": {
+    "agv_panel": {
+      "description": "Style #agvPanel similarly to #nodeListPanel — fixed position, white background, border, monospace font",
+      "position": "fixed, top: 40px, left: 10px",
+      "width": "195px",
+      "max_height": "150px",
+      "overflow_y": "auto",
+      "z_index": 50
+    },
+    "agv_entry": ".agv-entry { padding: 4px 10px; border-bottom: 1px solid #f0f0f8; display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11px; }",
+    "agv_entry_hover": ".agv-entry:hover { background: #f8f8fc; }",
+    "agv_swatch": ".agv-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.15); }",
+    "agv_add_btn": ".agv-add-btn { width: 100%; padding: 4px; font-family: monospace; font-size: 11px; border: none; border-top: 1px solid #e0e0e8; background: #f8f8fc; cursor: pointer; color: #4080e0; } .agv-add-btn:hover { background: #ddeeff; }",
+    "note": "The #seqPanel border and .panel-title color should use the active AGV color (set via inline style in JS, not hardcoded CSS), so the panel visually belongs to the selected AGV."
+  },
+
+  "implementation_order": [
+    "1. shared.js — add AGV_COLORS constant and normaliseAGVS() function",
+    "2. animplayer.js — refactor walker singleton to per-walker functions (resetWalker, updateWalker, applyActionEffect all take 'w' param)",
+    "3. animplayer.js — add makeWalker(), resetAllWalkers(), updateAllWalkers(), allDone()",
+    "4. animplayer.js — update state object (agvs array), update tick(), update file loader",
+    "5. animplayer.js — update drawScene() to loop over agvs for path lines and AGV rendering",
+    "6. animplayer.js — add detectConflicts(), draw conflict rings in drawScene",
+    "7. animplayer.js — update HUD and status badge for multi-AGV",
+    "8. style.css — add #agvPanel, .agv-entry, .agv-swatch, .agv-add-btn styles",
+    "9. cpicker.html — add #agvPanel div",
+    "10. cpicker.js — update state object, add activeAgvIdx",
+    "11. cpicker.js — replace all state.sequence references with state.agvs[state.activeAgvIdx].sequence",
+    "12. cpicker.js — add updateAgvPanel(), wire up AGV add/select clicks",
+    "13. cpicker.js — update drawLoop path drawing to render all AGVs",
+    "14. cpicker.js — update saveJSON and loadJsonInput handler",
+    "15. cpicker.js — update updateSeqPanel title/color, hudCounts, confirmClearOk"
+  ],
+
+  "backward_compatibility_checklist": [
+    "Old JSON with only NODES + SEQUENCE must load in both animplayer and cpicker without errors",
+    "Saving a single-AGV session must still produce a SEQUENCE key for compatibility",
+    "All Features 1, 3, 4 (dwell, label, mode, load-state coloring) must continue working per-AGV"
+  ],
+
+  "testing_checklist": [
+    "Load an existing single-AGV JSON — should behave identically to before",
+    "In cpicker: add a second AGV, build separate sequences, save — verify AGVS array in output JSON",
+    "In animplayer: load multi-AGV JSON — both AGVs should move simultaneously and independently",
+    "Conflict test: put two AGVs at the same node at the same time — red blink ring should appear on both",
+    "Feature 1 check: each AGV's path segments color independently by their own load state",
+    "Feature 4 check: manual mode person still appears correctly when multiple AGVs are present"
+  ]
+}
