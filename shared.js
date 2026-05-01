@@ -212,6 +212,60 @@ function normaliseSequence(rawSeq) {
   );
 }
 
+// ── Track normalisation & geometry ───────────────────────────────────────
+
+function normaliseTrack(raw) {
+  if (!raw) return { points: {}, segments: [] };
+  return {
+    points:   raw.points || {},
+    segments: (raw.segments || []).map(s => ({
+      id:        s.id        || '',
+      from:      s.from      || '',
+      to:        s.to        || '',
+      type:      s.type === 'arc' ? 'arc' : 'straight',
+      radius:    s.radius    ?? 100,
+      clockwise: s.clockwise !== false,
+    })),
+  };
+}
+
+// Compute arc center given two image-coord points, radius, and visual CW direction.
+// In canvas (y-down), CW visually = center is to the right of the A→B chord.
+// Returns null when the chord is longer than the diameter.
+function arcCenter(A, B, radius, clockwise) {
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.001 || dist > 2 * radius + 0.001) return null;
+  const h  = Math.sqrt(Math.max(0, radius * radius - (dist / 2) * (dist / 2)));
+  const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
+  // CW-perpendicular of chord in canvas (y-down): rotate chord 90° CW → (-dy, dx)
+  const px = -dy / dist, py = dx / dist;
+  const sign = clockwise ? 1 : -1;
+  return { x: mx + sign * h * px, y: my + sign * h * py };
+}
+
+// Stroke a single track segment onto ctx.  A, B are image-coord points.
+function strokeTrackSegment(ctx, A, B, seg, view) {
+  const sA = imgToScreen(A.x, A.y, view);
+  const sB = imgToScreen(B.x, B.y, view);
+  ctx.beginPath();
+  if (seg.type === 'arc' && seg.radius) {
+    const cImg = arcCenter(A, B, seg.radius, seg.clockwise !== false);
+    if (cImg) {
+      const sC = imgToScreen(cImg.x, cImg.y, view);
+      const r  = Math.hypot(sA.sx - sC.sx, sA.sy - sC.sy);
+      const sa = Math.atan2(sA.sy - sC.sy, sA.sx - sC.sx);
+      const ea = Math.atan2(sB.sy - sC.sy, sB.sx - sC.sx);
+      // clockwise=true → visual CW → canvas anticlockwise=false
+      ctx.arc(sC.sx, sC.sy, r, sa, ea, seg.clockwise === false);
+    } else {
+      ctx.moveTo(sA.sx, sA.sy); ctx.lineTo(sB.sx, sB.sy);
+    }
+  } else {
+    ctx.moveTo(sA.sx, sA.sy); ctx.lineTo(sB.sx, sB.sy);
+  }
+}
+
 // ── AGV array normalisation ───────────────────────────────────────────────
 // Accepts parsed JSON object; returns [{id, color, sequence}] array.
 // Backward-compatible: wraps legacy SEQUENCE key into a single AGV entry.

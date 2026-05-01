@@ -191,12 +191,18 @@ function openRadial(sx, sy, ix, iy) {
 }
 
 function closeRadial() {
-  radial.active = false;
-  radial.phase  = null;
-  // also cancel any pending sequence entry
+  radial.active    = false;
+  radial.phase     = null;
   seqEntry.pending = false;
   seqEntry.nodeId  = null;
   seqEntry.action  = null;
+  hideNameInput();
+}
+
+// Closes only the visual radial — keeps seqEntry intact so submitDetailsBar can still read it
+function closeRadialVisual() {
+  radial.active = false;
+  radial.phase  = null;
   hideNameInput();
 }
 
@@ -276,7 +282,7 @@ function openSeqAngleRadial(nodeId, action, cx, cy) {
 
 function selectSeqAngle(sectorIdx) {
   seqEntry.heading = sectorIdx * 45;
-  closeRadial();
+  closeRadialVisual();   // keep seqEntry.nodeId/action intact for submitDetailsBar
   showDetailsBar();
 }
 
@@ -652,6 +658,22 @@ function updateAgvPanel() {
       `<span class="agv-swatch" style="background:${agv.color}"></span>` +
       `<span class="agv-id">${agv.id}</span>` +
       `<span class="agv-seq-count">${agv.sequence.length}</span>`;
+
+    if (state.agvs.length > 1) {
+      const removeBtn = document.createElement('button');
+      removeBtn.className   = 'agv-remove-btn';
+      removeBtn.textContent = '×';
+      removeBtn.title       = 'Remove AGV';
+      removeBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        state.agvs.splice(i, 1);
+        if (state.activeAgvIdx >= state.agvs.length) state.activeAgvIdx = state.agvs.length - 1;
+        closeRadial(); hideActionPicker(); hideDetailsBar();
+        updateAgvPanel(); updateSeqPanel();
+      });
+      row.appendChild(removeBtn);
+    }
+
     row.addEventListener('click', () => {
       state.activeAgvIdx = i;
       closeRadial();
