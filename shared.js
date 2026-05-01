@@ -12,6 +12,8 @@ const COLORS = {
   },
 };
 
+const AGV_COLORS = ['#E63946', '#4080e0', '#1a9c50', '#cc44aa'];
+
 const ZOOM_MIN      = 0.1;
 const ZOOM_MAX      = 8.0;
 const ZOOM_STEP     = 0.15;
@@ -190,6 +192,15 @@ function drawHeadingLegend(ctx, canvasW, offsetY = 0) {
   ctx.restore();
 }
 
+// ── Colour helpers ────────────────────────────────────────────────────────
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 // ── Sequence normalisation ────────────────────────────────────────────────
 // Handles old format (string[]) and new format ({node,action}[])
 
@@ -199,4 +210,22 @@ function normaliseSequence(rawSeq) {
       ? { node: entry, action: 'move', heading: 0 }
       : { heading: 0, ...entry }   // backfill heading if missing
   );
+}
+
+// ── AGV array normalisation ───────────────────────────────────────────────
+// Accepts parsed JSON object; returns [{id, color, sequence}] array.
+// Backward-compatible: wraps legacy SEQUENCE key into a single AGV entry.
+
+function normaliseAGVS(data) {
+  if (data.AGVS && data.AGVS.length > 0) {
+    return data.AGVS.map((agv, i) => ({
+      id:       agv.id    || `AGV-0${i + 1}`,
+      color:    agv.color || AGV_COLORS[i % AGV_COLORS.length],
+      sequence: normaliseSequence(agv.sequence || []),
+    }));
+  }
+  if (data.SEQUENCE && data.SEQUENCE.length > 0) {
+    return [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: normaliseSequence(data.SEQUENCE) }];
+  }
+  return [];
 }

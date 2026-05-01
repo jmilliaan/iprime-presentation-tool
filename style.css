@@ -653,6 +653,71 @@ dialog input[type="file"] {
   font-style: italic;
 }
 
+/* ── AGV selector panel (cpicker top-left) ──────────────────────────── */
+
+#agvPanel {
+  position: fixed;
+  top: 75px;
+  left: 10px;
+  width: 195px;
+  max-height: 150px;
+  overflow-y: auto;
+  background: rgba(255,255,255,0.95);
+  border: 1px solid #c0c0cc;
+  border-radius: 6px;
+  display: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  z-index: 50;
+}
+
+#agvPanel::-webkit-scrollbar { width: 5px; }
+#agvPanel::-webkit-scrollbar-track { background: #f8f8fc; }
+#agvPanel::-webkit-scrollbar-thumb { background: #c8c8d8; border-radius: 3px; }
+
+.agv-entry {
+  padding: 4px 10px;
+  border-bottom: 1px solid #f0f0f8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: #1a1a2a;
+  border-left: 3px solid transparent;
+}
+
+.agv-entry:hover { background: #f8f8fc; }
+
+.agv-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+
+.agv-id { flex: 1; }
+
+.agv-seq-count {
+  font-size: 10px;
+  color: #9090a8;
+}
+
+.agv-add-btn {
+  display: block;
+  width: 100%;
+  padding: 5px;
+  font-family: monospace;
+  font-size: 11px;
+  border: none;
+  border-top: 1px solid #e0e0e8;
+  background: #f8f8fc;
+  cursor: pointer;
+  color: #4080e0;
+  text-align: center;
+}
+.agv-add-btn:hover { background: #ddeeff; }
+
 /* ── Home button (HUD inline — cpicker) ─────────────────────────────── */
 
 #hud #homeBtn {

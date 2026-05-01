@@ -6,11 +6,12 @@ const ctx    = canvas.getContext('2d');
 // ── Application state ─────────────────────────────────────────────────────
 
 const state = {
-  nodes:    {},       // { ID: {x, y, type} }  — no heading; heading is per sequence entry
-  sequence: [],       // [ {node, action, heading} ]
-  view:     { offsetX: 0, offsetY: 0, zoom: 1 },
-  mode:     'NODE',
-  bgImage:  null,
+  nodes:         {},
+  agvs:          [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }],
+  activeAgvIdx:  0,
+  view:          { offsetX: 0, offsetY: 0, zoom: 1 },
+  mode:          'NODE',
+  bgImage:       null,
   imgW: 0, imgH: 0,
   outputFilename: 'coords.json',
   mouseScreen: { sx: 0, sy: 0 },
@@ -21,6 +22,10 @@ const state = {
   hoveredNode:      null,
   actionPickerNode: null,
 };
+
+// Convenience accessor for the currently-edited AGV's sequence
+function activeSeq() { return state.agvs[state.activeAgvIdx].sequence; }
+function activeAgv()  { return state.agvs[state.activeAgvIdx]; }
 
 // ── Radial menu state ─────────────────────────────────────────────────────
 // Used in NODE mode (type_select | naming) and SEQUENCE mode (angle_select)
@@ -48,6 +53,7 @@ const seqEntry = {
 
 // ── DOM references ────────────────────────────────────────────────────────
 
+const agvPanel          = document.getElementById('agvPanel');
 const startupModal      = document.getElementById('startupModal');
 const confirmClearModal = document.getElementById('confirmClearModal');
 const actionPicker      = document.getElementById('actionPicker');
@@ -114,8 +120,15 @@ loadJsonInput.addEventListener('change', (e) => {
   reader.onload = (ev) => {
     try {
       const data = JSON.parse(ev.target.result);
-      if (data.NODES)    state.nodes    = data.NODES;
-      if (data.SEQUENCE) state.sequence = normaliseSequence(data.SEQUENCE);
+      if (data.NODES) state.nodes = data.NODES;
+      const loaded = normaliseAGVS(data);
+      if (loaded.length > 0) {
+        state.agvs = loaded.slice(0, 4);
+      } else {
+        state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
+      }
+      state.activeAgvIdx = 0;
+      updateAgvPanel();
       updateSeqPanel();
       updateNodeList();
     } catch { alert('Invalid JSON.'); }
@@ -131,6 +144,7 @@ document.getElementById('startBtn').addEventListener('click', () => {
   const name = filenameInput.value.trim();
   if (name) { state.outputFilename = name; hudFile.textContent = `→ ${name}`; }
   startupModal.close();
+  updateAgvPanel();
   updateSeqPanel();
   updateNodeList();
   requestAnimationFrame(drawLoop);
@@ -144,13 +158,15 @@ document.getElementById('confirmClearCancel').addEventListener('click', () => co
 
 document.getElementById('confirmClearOk').addEventListener('click', () => {
   confirmClearModal.close();
-  state.nodes = {}; state.sequence = [];
+  state.nodes = {};
+  state.agvs  = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
+  state.activeAgvIdx = 0;
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
   state.mode = 'NODE'; state.hoveredNode = null; state.actionPickerNode = null;
   loadJsonInput.value = ''; loadImgInput.value = '';
   filenameInput.value = 'coords.json'; state.outputFilename = 'coords.json';
-  closeRadial(); hideActionPicker();
-  updateSeqPanel(); updateNodeList(); updateModeBadge();
+  closeRadial(); hideActionPicker(); hideDetailsBar();
+  updateAgvPanel(); updateSeqPanel(); updateNodeList(); updateModeBadge();
   hudFile.textContent = '→ coords.json';
   startupModal.showModal();
 });
@@ -216,8 +232,9 @@ function submitDetailsBar() {
   if (isFinite(dwell) && dwell >= 0) entry.dwell = dwell;
   if (label) entry.label = label;
   if (modeManual.checked) entry.mode = 'manual';
-  state.sequence.push(entry);
+  activeSeq().push(entry);
   hideDetailsBar();
+  updateAgvPanel();
   updateSeqPanel();
 }
 
@@ -380,7 +397,7 @@ canvas.addEventListener('contextmenu', (e) => {
     const keys = Object.keys(state.nodes);
     if (keys.length) { delete state.nodes[keys[keys.length - 1]]; updateSeqPanel(); updateNodeList(); }
   } else {
-    if (state.sequence.length) { state.sequence.pop(); updateSeqPanel(); }
+    if (activeSeq().length) { activeSeq().pop(); updateAgvPanel(); updateSeqPanel(); }
   }
 });
 
@@ -466,7 +483,7 @@ canvas.addEventListener('mousemove', (e) => {
 
   hudCoords.textContent = `(${Math.round(state.mouseImg.ix)}, ${Math.round(state.mouseImg.iy)})`;
   hudZoom.textContent   = `zoom: ${state.view.zoom.toFixed(2)}×`;
-  hudCounts.textContent = `nodes: ${Object.keys(state.nodes).length} | seq: ${state.sequence.length}`;
+  hudCounts.textContent = `agvs: ${state.agvs.length} | nodes: ${Object.keys(state.nodes).length} | seq: ${activeSeq().length}`;
 });
 
 canvas.addEventListener('wheel', (e) => {
@@ -590,10 +607,14 @@ function drawAngleSelectRadial() {
 // ── Panel updates ─────────────────────────────────────────────────────────
 
 function updateSeqPanel() {
-  seqPanel.style.display = state.sequence.length > 0 ? 'block' : 'none';
-  seqPanelTitle.textContent = `SEQUENCE (${state.sequence.length})`;
+  const agv = activeAgv();
+  const seq = activeSeq();
+  seqPanel.style.display    = seq.length > 0 ? 'block' : 'none';
+  seqPanel.style.borderColor = agv.color;
+  seqPanelTitle.style.color  = agv.color;
+  seqPanelTitle.textContent  = `${agv.id} (${seq.length})`;
   seqList.innerHTML = '';
-  state.sequence.forEach(({ node, action, heading, dwell, label, mode }, i) => {
+  seq.forEach(({ node, action, heading, dwell, label, mode }, i) => {
     const row = document.createElement('div');
     row.className = 'seq-entry';
     let extras = '';
@@ -614,6 +635,50 @@ function updateSeqPanel() {
       extras;
     seqList.appendChild(row);
   });
+}
+
+function updateAgvPanel() {
+  agvPanel.innerHTML = '';
+  const title = document.createElement('div');
+  title.className   = 'panel-title';
+  title.textContent = `AGVs (${state.agvs.length})`;
+  agvPanel.appendChild(title);
+
+  state.agvs.forEach((agv, i) => {
+    const row = document.createElement('div');
+    row.className = 'agv-entry';
+    row.style.borderLeftColor = i === state.activeAgvIdx ? agv.color : 'transparent';
+    row.innerHTML =
+      `<span class="agv-swatch" style="background:${agv.color}"></span>` +
+      `<span class="agv-id">${agv.id}</span>` +
+      `<span class="agv-seq-count">${agv.sequence.length}</span>`;
+    row.addEventListener('click', () => {
+      state.activeAgvIdx = i;
+      closeRadial();
+      hideActionPicker();
+      hideDetailsBar();
+      updateAgvPanel();
+      updateSeqPanel();
+    });
+    agvPanel.appendChild(row);
+  });
+
+  if (state.agvs.length < 4) {
+    const addBtn = document.createElement('button');
+    addBtn.className   = 'agv-add-btn';
+    addBtn.textContent = '+ New AGV';
+    addBtn.addEventListener('click', () => {
+      const idx   = state.agvs.length;
+      const color = AGV_COLORS[idx % AGV_COLORS.length];
+      state.agvs.push({ id: `AGV-0${idx + 1}`, color, sequence: [] });
+      state.activeAgvIdx = idx;
+      updateAgvPanel();
+      updateSeqPanel();
+    });
+    agvPanel.appendChild(addBtn);
+  }
+
+  agvPanel.style.display = 'block';
 }
 
 function updateNodeList() {
@@ -640,7 +705,9 @@ function updateModeBadge() {
 // ── Save JSON ─────────────────────────────────────────────────────────────
 
 function saveJSON() {
-  const data = { NODES: state.nodes, SEQUENCE: state.sequence };
+  const agvsData = state.agvs.map(a => ({ id: a.id, color: a.color, sequence: a.sequence }));
+  const data = { NODES: state.nodes, AGVS: agvsData };
+  if (state.agvs.length === 1) data.SEQUENCE = state.agvs[0].sequence; // backward compat
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a    = document.createElement('a');
   a.href     = URL.createObjectURL(blob);
@@ -666,44 +733,48 @@ function drawLoop() {
     drawGrid(ctx, state.imgW, state.imgH, state.view);
   }
 
-  // Sequence path lines — colored by load state (Feature 1)
-  const validSeq = state.sequence.filter(e => state.nodes[e.node]);
-  if (validSeq.length > 1) {
+  // Path lines for all AGVs — load-state colors + per-AGV color (Features 1 & 2)
+  state.agvs.forEach((agv, agvIdx) => {
+    const isActive = agvIdx === state.activeAgvIdx;
+    const seq = agv.sequence.filter(e => state.nodes[e.node]);
+    if (seq.length < 2) return;
     let carrying = false;
-    for (let i = 0; i < validSeq.length - 1; i++) {
-      const a = validSeq[i].action;
+    for (let i = 0; i < seq.length - 1; i++) {
+      const a = seq[i].action;
       if (a === 'pickup')   carrying = true;
       if (a === 'release')  carrying = false;
       if (a === 'exchange') carrying = true;
-      const ptA = state.nodes[validSeq[i].node];
-      const ptB = state.nodes[validSeq[i + 1].node];
+      const ptA = state.nodes[seq[i].node];
+      const ptB = state.nodes[seq[i + 1].node];
       const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
       const { sx: bx, sy: by } = imgToScreen(ptB.x, ptB.y, state.view);
+      const alpha = isActive ? 1.0 : 0.4;
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
-      ctx.strokeStyle = carrying ? 'rgba(244,162,97,0.9)' : COLORS.sequence_line;
+      ctx.strokeStyle = carrying
+        ? hexToRgba(agv.color, 0.85 * alpha)
+        : hexToRgba(agv.color, 0.5  * alpha);
       ctx.lineWidth   = carrying ? 3 : 2;
+      ctx.setLineDash(carrying ? [] : [6, 4]);
       ctx.stroke();
     }
-  }
+    ctx.setLineDash([]);
 
-  // Sequence step labels + heading arrows
-  validSeq.forEach(({ node, heading }, i) => {
-    const pt = state.nodes[node];
-    const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-
-    // Step index
-    ctx.fillStyle    = COLORS.sequence_line;
-    ctx.font         = '11px monospace';
-    ctx.textAlign    = 'left';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(String(i), sx + DOT_RADIUS + 1, sy - 2);
-
-    // Heading arrow for this visit
-    if (heading !== undefined) {
-      drawHeadingArrow(ctx, sx, sy, heading, 18, COLORS.sequence_line, 1.5);
-    }
+    // Step labels + heading arrows for this AGV
+    seq.forEach(({ node, heading }, i) => {
+      const pt = state.nodes[node];
+      const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
+      const alpha = isActive ? 1.0 : 0.4;
+      ctx.fillStyle    = hexToRgba(agv.color, alpha);
+      ctx.font         = '11px monospace';
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(String(i), sx + DOT_RADIUS + 1, sy - 2);
+      if (heading !== undefined) {
+        drawHeadingArrow(ctx, sx, sy, heading, 18, hexToRgba(agv.color, alpha), 1.5);
+      }
+    });
   });
 
   // Nodes
@@ -712,10 +783,10 @@ function drawLoop() {
     const col = dotColorForType(pt.type);
 
     if (state.mode === 'SEQUENCE') {
-      if (state.sequence.some(e => e.node === id)) {
+      if (activeSeq().some(e => e.node === id)) {
         ctx.beginPath();
         ctx.arc(sx, sy, DOT_RADIUS + 5, 0, Math.PI * 2);
-        ctx.strokeStyle = COLORS.seq_highlight; ctx.lineWidth = 1.5; ctx.stroke();
+        ctx.strokeStyle = activeAgv().color; ctx.lineWidth = 1.5; ctx.stroke();
       }
       if (id === state.hoveredNode) {
         ctx.beginPath();

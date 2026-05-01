@@ -1,10 +1,10 @@
-// animplayer.js — AGV animation player logic
+// animplayer.js — AGV animation player (multi-AGV, Feature 2)
 
 const canvas = document.getElementById('canvas');
 const ctx    = canvas.getContext('2d');
 
-const BAR_TOP    = 44;   // load bar height
-const BAR_BOTTOM = 48;   // toolbar height
+const BAR_TOP    = 44;
+const BAR_BOTTOM = 48;
 
 const AGV_SIZE   = 30;
 const TROLLEY_W  = 28;
@@ -19,14 +19,13 @@ const ACTION_COLORS = {
 // ── Application state ─────────────────────────────────────────────────────
 
 const state = {
-  nodes:    {},   // {ID: {x,y,type,heading}}
-  sequence: [],   // [{node, action}]
-  view:     { offsetX: 0, offsetY: 0, zoom: 1 },
-  bgImage:  null,
-  imgW:     0,
-  imgH:     0,
+  nodes:   {},
+  agvs:    [],   // array of walker objects — see makeWalker()
+  view:    { offsetX: 0, offsetY: 0, zoom: 1 },
+  bgImage: null,
+  imgW:    0,
+  imgH:    0,
 
-  // Player controls
   playing:        false,
   timeScale:      1,
   agvSpeed:       120,
@@ -34,28 +33,31 @@ const state = {
   showGrid:       true,
   showLabels:     true,
 
-  // Pan
   isPanning:    false,
   panStart:     { sx: 0, sy: 0 },
   panViewStart: { offsetX: 0, offsetY: 0 },
   mouse:        { sx: 0, sy: 0 },
 
-  // Animation time
   lastTimestamp: null,
-  elapsed:       0,   // total elapsed simulation time (for pulse effects)
+  elapsed:       0,
 };
 
-// ── Sequence walker ───────────────────────────────────────────────────────
+// ── Walker architecture ───────────────────────────────────────────────────
 
-const walker = {
-  currentStep:  0,
-  agvPos:       { x: 0, y: 0 },
-  agvHeading:   0,
-  trolleyState: 'empty',   // 'empty' | 'carrying'
-  trolleyPos:   null,      // {x,y} when detached; null when carrying or not yet placed
-  phase:        'idle',    // 'idle' | 'action_pause' | 'moving' | 'done'
-  actionTimer:  0,
-};
+function makeWalker(agvDef) {
+  return {
+    id:           agvDef.id    || 'AGV-01',
+    color:        agvDef.color || AGV_COLORS[0],
+    sequence:     agvDef.sequence || [],
+    currentStep:  0,
+    agvPos:       { x: 0, y: 0 },
+    agvHeading:   0,
+    trolleyState: 'empty',
+    trolleyPos:   null,
+    phase:        'idle',
+    actionTimer:  0,
+  };
+}
 
 function actionDurationFor(seqE) {
   if (seqE.dwell !== undefined) return seqE.dwell;
@@ -65,102 +67,135 @@ function actionDurationFor(seqE) {
   return state.actionDuration;
 }
 
-function applyActionEffect(action, nodePos) {
+function applyActionEffect(action, nodePos, w) {
   switch (action) {
     case 'pickup':
-      walker.trolleyState = 'carrying';
-      walker.trolleyPos   = null;
+      w.trolleyState = 'carrying';
+      w.trolleyPos   = null;
       break;
     case 'release':
-      walker.trolleyState = 'empty';
-      walker.trolleyPos   = { x: nodePos.x, y: nodePos.y, heading: walker.agvHeading };
+      w.trolleyState = 'empty';
+      w.trolleyPos   = { x: nodePos.x, y: nodePos.y, heading: w.agvHeading };
       break;
     case 'exchange':
-      walker.trolleyPos   = { x: nodePos.x, y: nodePos.y, heading: walker.agvHeading };
-      walker.trolleyState = 'carrying';
+      w.trolleyPos   = { x: nodePos.x, y: nodePos.y, heading: w.agvHeading };
+      w.trolleyState = 'carrying';
       break;
-    case 'move':
     default:
       break;
   }
 }
 
-function resetWalker() {
-  if (state.sequence.length === 0) return;
-  const startNodeId = state.sequence[0].node;
+function resetWalker(w) {
+  if (w.sequence.length === 0) { w.phase = 'idle'; return; }
+  const startNodeId = w.sequence[0].node;
   const startPt     = state.nodes[startNodeId];
-  if (!startPt) return;
+  if (!startPt) { w.phase = 'idle'; return; }
 
-  walker.currentStep  = 0;
-  walker.agvPos       = { x: startPt.x, y: startPt.y };
-  walker.agvHeading   = state.sequence[0]?.heading ?? 0;
-  walker.trolleyState = 'empty';
-  walker.trolleyPos   = null;
-  walker.phase        = 'action_pause';   // perform action at first node immediately
-  walker.actionTimer  = 0;
-  state.elapsed       = 0;
+  w.currentStep  = 0;
+  w.agvPos       = { x: startPt.x, y: startPt.y };
+  w.agvHeading   = w.sequence[0]?.heading ?? 0;
+  w.trolleyState = 'empty';
+  w.trolleyPos   = null;
+  w.phase        = 'action_pause';
+  w.actionTimer  = 0;
 }
 
-function updateWalker(dt) {
-  if (walker.phase === 'idle' || walker.phase === 'done') return;
+function resetAllWalkers() {
+  state.agvs.forEach(w => resetWalker(w));
+  state.elapsed = 0;
+}
 
-  if (walker.phase === 'action_pause') {
-    const seqE     = state.sequence[walker.currentStep];
+function updateWalker(w, dt) {
+  if (w.phase === 'idle' || w.phase === 'done') return;
+
+  if (w.phase === 'action_pause') {
+    const seqE     = w.sequence[w.currentStep];
     const action   = seqE.action;
     const duration = actionDurationFor(seqE);
-    walker.actionTimer += dt;
+    w.actionTimer += dt;
 
-    if (walker.actionTimer >= duration) {
-      // Apply effect and advance
-      const nodeId  = seqE.node;
-      const nodePt  = state.nodes[nodeId];
-      if (nodePt) applyActionEffect(action, nodePt);
+    if (w.actionTimer >= duration) {
+      const nodePt = state.nodes[seqE.node];
+      if (nodePt) applyActionEffect(action, nodePt, w);
 
-      walker.currentStep++;
-      if (walker.currentStep >= state.sequence.length) {
-        walker.phase = 'done';
-        return;
-      }
-      walker.phase       = 'moving';
-      walker.actionTimer = 0;
+      w.currentStep++;
+      if (w.currentStep >= w.sequence.length) { w.phase = 'done'; return; }
+      w.phase       = 'moving';
+      w.actionTimer = 0;
     }
     return;
   }
 
-  if (walker.phase === 'moving') {
-    const targetNodeId = state.sequence[walker.currentStep].node;
+  if (w.phase === 'moving') {
+    const targetNodeId = w.sequence[w.currentStep].node;
     const targetPt     = state.nodes[targetNodeId];
-    if (!targetPt) { walker.phase = 'done'; return; }
+    if (!targetPt) { w.phase = 'done'; return; }
 
-    const path   = [{ x: walker.agvPos.x, y: walker.agvPos.y }, targetPt];
-    const result = advanceAlongPath(walker.agvPos, path, 1, state.agvSpeed, dt);
+    const path   = [{ x: w.agvPos.x, y: w.agvPos.y }, targetPt];
+    const result = advanceAlongPath(w.agvPos, path, 1, state.agvSpeed, dt);
 
-    // Compute heading from direction of travel
-    const dx = targetPt.x - walker.agvPos.x;
-    const dy = targetPt.y - walker.agvPos.y;
+    const dx = targetPt.x - w.agvPos.x;
+    const dy = targetPt.y - w.agvPos.y;
     if (Math.hypot(dx, dy) > 0.5) {
       const targetHeading = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
-      // Smooth heading toward target at 300 deg/s
-      let diff = targetHeading - walker.agvHeading;
+      let diff = targetHeading - w.agvHeading;
       if (diff >  180) diff -= 360;
       if (diff < -180) diff += 360;
       const maxTurn = 300 * dt;
-      walker.agvHeading += Math.max(-maxTurn, Math.min(maxTurn, diff));
-      walker.agvHeading = ((walker.agvHeading % 360) + 360) % 360;
+      w.agvHeading += Math.max(-maxTurn, Math.min(maxTurn, diff));
+      w.agvHeading  = ((w.agvHeading % 360) + 360) % 360;
     }
 
-    walker.agvPos = result.pos;
+    w.agvPos = result.pos;
 
-    // Check arrival
     if (result.targetIdx >= path.length) {
-      walker.agvPos = { x: targetPt.x, y: targetPt.y };
-      // Snap to the heading defined for this sequence entry
-      const entryHeading = state.sequence[walker.currentStep]?.heading;
-      if (entryHeading !== undefined) walker.agvHeading = entryHeading;
-      walker.phase  = 'action_pause';
-      walker.actionTimer = 0;
+      w.agvPos = { x: targetPt.x, y: targetPt.y };
+      const entryHeading = w.sequence[w.currentStep]?.heading;
+      if (entryHeading !== undefined) w.agvHeading = entryHeading;
+      w.phase       = 'action_pause';
+      w.actionTimer = 0;
     }
   }
+}
+
+function updateAllWalkers(dt) {
+  state.agvs.forEach(w => {
+    if (w.phase !== 'idle' && w.phase !== 'done') updateWalker(w, dt);
+  });
+}
+
+function allDone() {
+  return state.agvs.length > 0
+    && state.agvs.every(w => w.phase === 'done' || w.phase === 'idle');
+}
+
+// ── Conflict detection ────────────────────────────────────────────────────
+
+function detectConflicts() {
+  const conflicting = new Set();
+  for (let i = 0; i < state.agvs.length; i++) {
+    const wi = state.agvs[i];
+    if (wi.phase === 'idle' || wi.phase === 'done') continue;
+    for (let j = i + 1; j < state.agvs.length; j++) {
+      const wj = state.agvs[j];
+      if (wj.phase === 'idle' || wj.phase === 'done') continue;
+
+      const niId = wi.sequence[wi.currentStep]?.node;
+      const njId = wj.sequence[wj.currentStep]?.node;
+      const sameNode = niId && njId && niId === njId
+        && wi.phase === 'action_pause' && wj.phase === 'action_pause';
+
+      const dist = Math.hypot(wi.agvPos.x - wj.agvPos.x, wi.agvPos.y - wj.agvPos.y)
+        * state.view.zoom;
+
+      if (sameNode || dist < AGV_SIZE * 2) {
+        conflicting.add(i);
+        conflicting.add(j);
+      }
+    }
+  }
+  return conflicting;
 }
 
 // ── Canvas resize ─────────────────────────────────────────────────────────
@@ -195,14 +230,17 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (ev) => {
     try {
-      const data = JSON.parse(ev.target.result);
-      state.nodes    = data.NODES    || {};
-      state.sequence = normaliseSequence(data.SEQUENCE || []);
+      const data  = JSON.parse(ev.target.result);
+      state.nodes = data.NODES || {};
+      state.agvs  = normaliseAGVS(data).map(agvDef => makeWalker(agvDef));
+      if (state.agvs.length === 0)
+        state.agvs = [makeWalker({ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] })];
+      const totalSteps = state.agvs.reduce((s, w) => s + w.sequence.length, 0);
       document.getElementById('loadStatus').textContent =
-        `${file.name} — ${Object.keys(state.nodes).length} nodes, ${state.sequence.length} seq entries`;
+        `${file.name} — ${Object.keys(state.nodes).length} nodes · ${state.agvs.length} AGV(s) · ${totalSteps} steps`;
       state.playing = false;
       updatePlayButton();
-      resetWalker();
+      resetAllWalkers();
       updateStatusBadge();
       updateStepCounter();
     } catch { alert('Invalid JSON file.'); }
@@ -238,44 +276,40 @@ function updatePlayButton() {
 }
 
 function updateStatusBadge() {
-  const phaseLabels = {
-    idle:         'IDLE',
-    moving:       'MOVING',
-    done:         'DONE',
-    action_pause: currentActionLabel(),
-  };
-  const label    = phaseLabels[walker.phase] || 'IDLE';
-  const cssClass = {
-    IDLE:     'status-idle',
-    MOVING:   'status-moving',
-    PICKUP:   'status-pickup',
-    RELEASE:  'status-release',
-    EXCHANGE: 'status-exchange',
-    DONE:     'status-done',
-  }[label] || 'status-idle';
-  statusBadge.textContent = label;
-  statusBadge.className   = `${cssClass}`;
-}
-
-function currentActionLabel() {
-  if (walker.currentStep >= state.sequence.length) return 'DONE';
-  const action = state.sequence[walker.currentStep]?.action || 'move';
-  return action === 'move' ? 'MOVING' : action.toUpperCase();
+  if (state.agvs.length === 0 || state.agvs.every(w => w.phase === 'idle')) {
+    statusBadge.textContent = 'IDLE';
+    statusBadge.className   = 'status-idle';
+    return;
+  }
+  if (allDone()) {
+    statusBadge.textContent = 'DONE';
+    statusBadge.className   = 'status-done';
+    return;
+  }
+  const anyMoving = state.agvs.some(w => w.phase === 'moving');
+  statusBadge.textContent = anyMoving ? 'MOVING' : 'ACTIVE';
+  statusBadge.className   = anyMoving ? 'status-moving' : 'status-pickup';
 }
 
 function updateStepCounter() {
-  stepCounter.textContent = `step ${walker.currentStep} / ${state.sequence.length}`;
+  if (state.agvs.length === 1) {
+    const w = state.agvs[0];
+    stepCounter.textContent = `step ${w.currentStep} / ${w.sequence.length}`;
+  } else {
+    const done = state.agvs.filter(w => w.phase === 'done').length;
+    stepCounter.textContent = `${done} / ${state.agvs.length} AGVs done`;
+  }
 }
 
 btnPlayPause.addEventListener('click', () => {
-  if (state.sequence.length === 0) return;
-  if (walker.phase === 'done') resetWalker();
+  if (state.agvs.every(w => w.sequence.length === 0)) return;
+  if (allDone()) resetAllWalkers();
   state.playing = !state.playing;
   updatePlayButton();
 });
 
 btnRestart.addEventListener('click', () => {
-  resetWalker();
+  resetAllWalkers();
   state.playing = false;
   updatePlayButton();
   updateStatusBadge();
@@ -302,7 +336,6 @@ document.getElementById('showLabels').addEventListener('change', (e) => {
   state.showLabels = e.target.checked;
 });
 
-// Space bar play/pause
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && e.target.tagName !== 'INPUT') {
     e.preventDefault();
@@ -326,11 +359,7 @@ function updateRecordButton() {
 }
 
 btnRecord.addEventListener('click', () => {
-  if (rec.active) {
-    stopRecording();
-  } else {
-    startRecording();
-  }
+  if (rec.active) stopRecording(); else startRecording();
 });
 
 function startRecording() {
@@ -338,13 +367,12 @@ function startRecording() {
     alert('Video recording is not supported in this browser.\nPlease use Chrome or Edge.');
     return;
   }
-  if (state.sequence.length === 0) {
+  if (state.agvs.every(w => w.sequence.length === 0)) {
     alert('Load a layout JSON file first.');
     return;
   }
 
-  // Reset and auto-play
-  resetWalker();
+  resetAllWalkers();
   state.playing = true;
   updatePlayButton();
   updateStatusBadge();
@@ -373,7 +401,7 @@ function startRecording() {
     updateRecordButton();
   };
 
-  rec.recorder.start(100); // collect data every 100ms
+  rec.recorder.start(100);
   rec.active = true;
   updateRecordButton();
 }
@@ -381,7 +409,6 @@ function startRecording() {
 function stopRecording() {
   if (!rec.active || !rec.recorder) return;
   rec.recorder.stop();
-  // rec.active is cleared in onstop
 }
 
 // ── Pan + zoom ────────────────────────────────────────────────────────────
@@ -431,7 +458,6 @@ function drawActionIndicator(sx, sy, action, progress, label) {
   const col = ACTION_COLORS[action];
   if (!col) return;
 
-  // Progress arc (grows from 0 to full circle as action completes)
   const startAngle = -Math.PI / 2;
   const endAngle   = startAngle + 2 * Math.PI * Math.min(progress, 1);
   ctx.beginPath();
@@ -441,14 +467,12 @@ function drawActionIndicator(sx, sy, action, progress, label) {
   ctx.lineCap     = 'round';
   ctx.stroke();
 
-  // Action name above AGV
   ctx.fillStyle    = col;
   ctx.font         = 'bold 11px monospace';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'bottom';
   ctx.fillText(action.toUpperCase(), sx, sy - AGV_SIZE / 2 - 14);
 
-  // Optional custom label below action name
   if (label) {
     ctx.font      = '10px monospace';
     ctx.fillStyle = col;
@@ -456,7 +480,6 @@ function drawActionIndicator(sx, sy, action, progress, label) {
   }
 }
 
-// Dwell annotation for move-with-dwell stops (Feature 3)
 function drawDwellAnnotation(sx, sy, label, progress) {
   const col = '#4080e0';
   const startAngle = -Math.PI / 2;
@@ -475,7 +498,6 @@ function drawDwellAnnotation(sx, sy, label, progress) {
   ctx.fillText(label.toUpperCase(), sx, sy - AGV_SIZE / 2 - 14);
 }
 
-// Stick figure person for manual trolley operations (Feature 4)
 function drawPerson(sx, sy, heading) {
   const perpAngle = ((heading + 90) * Math.PI) / 180;
   const offset    = AGV_SIZE + 18;
@@ -489,34 +511,25 @@ function drawPerson(sx, sy, heading) {
   ctx.lineCap     = 'round';
   ctx.lineJoin    = 'round';
 
-  // Head
   ctx.beginPath();
   ctx.arc(px, py - 12, 5, 0, Math.PI * 2);
   ctx.fill();
-  // Body
   ctx.beginPath();
-  ctx.moveTo(px, py - 7);
-  ctx.lineTo(px, py + 3);
-  ctx.stroke();
-  // Arms (reaching toward AGV side)
-  ctx.beginPath();
-  ctx.moveTo(px - 7, py - 3);
-  ctx.lineTo(px + 7, py - 3);
-  ctx.stroke();
-  // Legs
-  ctx.beginPath();
-  ctx.moveTo(px, py + 3);
-  ctx.lineTo(px - 5, py + 13);
+  ctx.moveTo(px, py - 7); ctx.lineTo(px, py + 3);
   ctx.stroke();
   ctx.beginPath();
-  ctx.moveTo(px, py + 3);
-  ctx.lineTo(px + 5, py + 13);
+  ctx.moveTo(px - 7, py - 3); ctx.lineTo(px + 7, py - 3);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(px, py + 3); ctx.lineTo(px - 5, py + 13);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(px, py + 3); ctx.lineTo(px + 5, py + 13);
   ctx.stroke();
 
   ctx.restore();
 }
 
-// heading in degrees — trolley is drawn rotated so its long axis aligns with travel direction
 function drawTrolley(sx, sy, heading, attached) {
   const w = attached ? 22 : TROLLEY_W;
   const h = attached ? 14 : TROLLEY_H;
@@ -530,7 +543,6 @@ function drawTrolley(sx, sy, heading, attached) {
   ctx.strokeStyle = '#c07830';
   ctx.lineWidth   = 2;
   ctx.stroke();
-  // Wheel dots
   for (const s of [-1, 1]) {
     ctx.beginPath();
     ctx.arc(s * (w / 2 - 4), h / 2 - 2, 2, 0, Math.PI * 2);
@@ -540,9 +552,9 @@ function drawTrolley(sx, sy, heading, attached) {
   ctx.restore();
 }
 
-function drawAGV(sx, sy, heading) {
+function drawAGV(sx, sy, heading, color = '#E63946') {
   const half = AGV_SIZE / 2;
-  drawRoundRect(sx - half, sy - half, AGV_SIZE, AGV_SIZE, 4, '#E63946', '#ffffff');
+  drawRoundRect(sx - half, sy - half, AGV_SIZE, AGV_SIZE, 4, color, '#ffffff');
   drawHeadingArrow(ctx, sx, sy, heading, 16, '#ffffff', 2);
 }
 
@@ -564,7 +576,6 @@ function drawScene(timestamp) {
   ctx.fillStyle = '#f0f0f0';
   ctx.fillRect(0, 0, cw, ch);
 
-  // Background
   if (state.bgImage) {
     const { sx, sy } = imgToScreen(0, 0, state.view);
     ctx.drawImage(state.bgImage, sx, sy, state.imgW * state.view.zoom, state.imgH * state.view.zoom);
@@ -574,42 +585,44 @@ function drawScene(timestamp) {
     drawGrid(ctx, state.imgW, state.imgH, state.view);
   }
 
-  // Sequence path lines — colored by load state (Feature 1)
-  const validSeq = state.sequence.filter(e => state.nodes[e.node]);
-  if (validSeq.length > 1) {
+  // Path lines per AGV — load-state color + AGV color (Features 1 & 2)
+  state.agvs.forEach(agv => {
+    const seq = agv.sequence.filter(e => state.nodes[e.node]);
+    if (seq.length < 2) return;
     let carrying = false;
-    for (let i = 0; i < validSeq.length - 1; i++) {
-      const a = validSeq[i].action;
+    for (let i = 0; i < seq.length - 1; i++) {
+      const a = seq[i].action;
       if (a === 'pickup')   carrying = true;
       if (a === 'release')  carrying = false;
       if (a === 'exchange') carrying = true;
-      const ptA = state.nodes[validSeq[i].node];
-      const ptB = state.nodes[validSeq[i + 1].node];
+      const ptA = state.nodes[seq[i].node];
+      const ptB = state.nodes[seq[i + 1].node];
       const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
       const { sx: bx, sy: by } = imgToScreen(ptB.x, ptB.y, state.view);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
-      ctx.strokeStyle = carrying ? 'rgba(244,162,97,0.75)' : 'rgba(180,160,200,0.55)';
+      ctx.strokeStyle = carrying ? hexToRgba(agv.color, 0.75) : hexToRgba(agv.color, 0.35);
       ctx.lineWidth   = carrying ? 3 : 2;
       ctx.setLineDash(carrying ? [] : [6, 4]);
       ctx.stroke();
     }
     ctx.setLineDash([]);
-  }
+  });
+
+  // Collect active target nodes from all walkers for pulse
+  const activeTargetIds = new Set(
+    state.agvs
+      .filter(w => w.phase === 'moving' && w.sequence[w.currentStep])
+      .map(w => w.sequence[w.currentStep].node)
+  );
 
   // Node dots
   for (const [id, pt] of Object.entries(state.nodes)) {
     const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
     const col = dotColorForType(pt.type);
 
-    // Active target pulse
-    const targetId = walker.phase === 'moving'
-      ? state.sequence[walker.currentStep]?.node
-      : null;
-    if (id === targetId) {
-      drawActivePulse(sx, sy, state.elapsed);
-    }
+    if (activeTargetIds.has(id)) drawActivePulse(sx, sy, state.elapsed);
 
     ctx.beginPath();
     ctx.arc(sx, sy, DOT_RADIUS, 0, Math.PI * 2);
@@ -630,77 +643,99 @@ function drawScene(timestamp) {
     }
   }
 
-  // Sequence step labels
+  // Sequence step labels per AGV
   if (state.showLabels) {
-    validSeq.forEach(({ node, action }, i) => {
-      const pt = state.nodes[node];
-      const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-      ctx.fillStyle    = '#aa2288';
-      ctx.font         = '10px monospace';
-      ctx.textAlign    = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(`${i}:${action[0]}`, sx + DOT_RADIUS + 1, sy - 2);
+    state.agvs.forEach(agv => {
+      agv.sequence.filter(e => state.nodes[e.node]).forEach(({ node, action }, i) => {
+        const pt = state.nodes[node];
+        const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
+        ctx.fillStyle    = hexToRgba(agv.color, 0.9);
+        ctx.font         = '10px monospace';
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(`${i}:${action[0]}`, sx + DOT_RADIUS + 1, sy - 2);
+      });
     });
   }
 
-  // Detached trolley — drawn at release position, oriented to the heading it had when dropped
-  if (walker.trolleyState === 'empty' && walker.trolleyPos) {
-    const { sx, sy } = imgToScreen(walker.trolleyPos.x, walker.trolleyPos.y, state.view);
-    drawTrolley(sx, sy, walker.trolleyPos.heading ?? 0, false);
-  }
+  const conflicts = detectConflicts();
 
-  // AGV + attached trolley + hitch
-  if (walker.phase !== 'idle' && state.sequence.length > 0) {
-    const { sx: ax, sy: ay } = imgToScreen(walker.agvPos.x, walker.agvPos.y, state.view);
-    const rad = walker.agvHeading * Math.PI / 180;
+  // Detached trolleys (all AGVs — drawn before AGV bodies)
+  state.agvs.forEach(agv => {
+    if (agv.trolleyState === 'empty' && agv.trolleyPos) {
+      const { sx, sy } = imgToScreen(agv.trolleyPos.x, agv.trolleyPos.y, state.view);
+      drawTrolley(sx, sy, agv.trolleyPos.heading ?? 0, false);
+    }
+  });
 
-    if (walker.trolleyState === 'carrying') {
-      // Trolley sits behind AGV: offset opposite to heading direction
-      const HITCH = AGV_SIZE / 2 + 6 + 7;   // agv-half + gap + trolley-half
+  // Each AGV body, hitch, conflict ring, action indicator
+  state.agvs.forEach((agv, idx) => {
+    if (agv.phase === 'idle' || agv.sequence.length === 0) return;
+
+    const { sx: ax, sy: ay } = imgToScreen(agv.agvPos.x, agv.agvPos.y, state.view);
+    const rad = agv.agvHeading * Math.PI / 180;
+
+    if (agv.trolleyState === 'carrying') {
+      const HITCH = AGV_SIZE / 2 + 6 + 7;
       const tx = ax - HITCH * Math.cos(rad);
       const ty = ay - HITCH * Math.sin(rad);
 
-      // Hitch bar
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(tx, ty);
-      ctx.strokeStyle = '#707080';
+      ctx.strokeStyle = hexToRgba(agv.color, 0.6);
       ctx.lineWidth   = 2.5;
       ctx.lineCap     = 'round';
       ctx.stroke();
-      // Hitch point knuckle
       ctx.beginPath();
       ctx.arc(tx, ty, 3, 0, Math.PI * 2);
       ctx.fillStyle = '#505060';
       ctx.fill();
       ctx.restore();
 
-      drawTrolley(tx, ty, walker.agvHeading, true);
+      drawTrolley(tx, ty, agv.agvHeading, true);
     }
 
-    drawAGV(ax, ay, walker.agvHeading);
+    drawAGV(ax, ay, agv.agvHeading, agv.color);
 
-    // Action indicator during pause (Features 3 & 4)
-    if (walker.phase === 'action_pause') {
-      const seqE     = state.sequence[walker.currentStep];
+    // ID label above AGV when multiple AGVs are present
+    if (state.agvs.length > 1) {
+      ctx.fillStyle    = agv.color;
+      ctx.font         = 'bold 9px monospace';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(agv.id, ax, ay - AGV_SIZE / 2 - 2);
+    }
+
+    // Conflict ring (blinking red)
+    if (conflicts.has(idx)) {
+      const blink = 0.4 + 0.6 * Math.abs(Math.sin(state.elapsed * 4));
+      ctx.beginPath();
+      ctx.arc(ax, ay, AGV_SIZE / 2 + 16, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(220,30,30,${blink.toFixed(2)})`;
+      ctx.lineWidth   = 2.5;
+      ctx.stroke();
+    }
+
+    // Action indicator (Features 3 & 4)
+    if (agv.phase === 'action_pause') {
+      const seqE     = agv.sequence[agv.currentStep];
       const action   = seqE?.action;
       const duration = actionDurationFor(seqE || { action: 'move' });
       if (action && duration > 0) {
-        const progress = walker.actionTimer / duration;
+        const progress = agv.actionTimer / duration;
         if (action !== 'move') {
           drawActionIndicator(ax, ay, action, progress, seqE?.label);
-          if (seqE?.mode === 'manual') drawPerson(ax, ay, walker.agvHeading);
+          if (seqE?.mode === 'manual') drawPerson(ax, ay, agv.agvHeading);
         } else {
           drawDwellAnnotation(ax, ay, seqE?.label || 'WAIT', progress);
         }
       }
     }
-  }
+  });
 
-  // HUD overlay
   drawHUD(cw, ch);
-
   drawHeadingLegend(ctx, cw);
 }
 
@@ -708,17 +743,41 @@ function drawHUD(cw, ch) {
   ctx.save();
   ctx.fillStyle = 'rgba(240,240,248,0.92)';
   ctx.fillRect(0, ch - 22, cw, 22);
-
-  ctx.fillStyle    = '#1a1a2a';
   ctx.font         = '11px monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign    = 'left';
-  ctx.fillText(
-    `Step ${walker.currentStep} / ${state.sequence.length}   Phase: ${walker.phase}   Speed: ${state.timeScale}×`,
-    10, ch - 11
-  );
 
-  // REC indicator
+  const activeWalkers = state.agvs.filter(w => w.phase !== 'idle');
+  let x = 10;
+
+  if (activeWalkers.length === 0) {
+    ctx.fillStyle = '#9090a8';
+    ctx.fillText('No layout loaded', x, ch - 11);
+  } else {
+    activeWalkers.slice(0, 3).forEach((w, i) => {
+      if (i > 0) {
+        ctx.fillStyle = '#c0c0cc';
+        ctx.fillText(' | ', x, ch - 11);
+        x += ctx.measureText(' | ').width;
+      }
+      const phaseLabel = w.phase === 'action_pause'
+        ? (w.sequence[w.currentStep]?.action?.toUpperCase() || 'PAUSE')
+        : w.phase.toUpperCase();
+      const label = `${w.id}: ${phaseLabel}`;
+      ctx.fillStyle = w.color;
+      ctx.fillText(label, x, ch - 11);
+      x += ctx.measureText(label).width;
+    });
+    if (activeWalkers.length > 3) {
+      ctx.fillStyle = '#9090a8';
+      const more = ` +${activeWalkers.length - 3} more`;
+      ctx.fillText(more, x, ch - 11);
+      x += ctx.measureText(more).width;
+    }
+    ctx.fillStyle = '#9090a8';
+    ctx.fillText(`   Speed: ${state.timeScale}×`, x, ch - 11);
+  }
+
   if (rec.active) {
     const blink = Math.sin(Date.now() / 350) > 0;
     ctx.beginPath();
@@ -740,14 +799,15 @@ function tick(timestamp) {
   const rawDt = (timestamp - state.lastTimestamp) / 1000;
   state.lastTimestamp = timestamp;
 
-  const dt = Math.min(rawDt, 0.1) * state.timeScale;   // cap at 100ms to avoid spiral on tab switch
+  const dt = Math.min(rawDt, 0.1) * state.timeScale;
 
-  if (state.playing && walker.phase !== 'idle' && walker.phase !== 'done') {
+  const anyActive = state.agvs.some(w => w.phase !== 'idle' && w.phase !== 'done');
+  if (state.playing && anyActive) {
     state.elapsed += dt;
-    updateWalker(dt);
+    updateAllWalkers(dt);
     updateStatusBadge();
     updateStepCounter();
-    if (walker.phase === 'done') {
+    if (allDone()) {
       state.playing = false;
       updatePlayButton();
       if (rec.active) stopRecording();
