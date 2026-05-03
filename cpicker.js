@@ -5,10 +5,20 @@ const ctx    = canvas.getContext('2d');
 
 // ── Application state ─────────────────────────────────────────────────────
 
+const TRACK_COLOR = '#3060d0';
+
 const state = {
   nodes:         {},
   agvs:          [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }],
   activeAgvIdx:  0,
+  track:         { points: {}, segments: [] },
+  trackSel:      null,   // selected track-point ID (start of next segment)
+  trackArc:      false,  // next segment is arc
+  trackR:        100,    // arc radius for new segments
+  trackCW:       true,   // arc clockwise direction
+  trackPtN:      1,      // auto-name counter for TPs
+  trackSegN:     1,      // auto-name counter for segments
+  trackLastSeg:  null,   // ID of last created segment (for radius editing)
   view:          { offsetX: 0, offsetY: 0, zoom: 1 },
   mode:          'NODE',
   bgImage:       null,
@@ -78,6 +88,14 @@ const dwellInput        = document.getElementById('dwellInput');
 const labelInput        = document.getElementById('labelInput');
 const modeManual        = document.getElementById('modeManual');
 const detailsModeLabel  = document.getElementById('detailsModeLabel');
+const trackBar          = document.getElementById('trackBar');
+const trackStraightBtn  = document.getElementById('trackStraightBtn');
+const trackArcBtn       = document.getElementById('trackArcBtn');
+const trackArcControls  = document.getElementById('trackArcControls');
+const trackRadiusInput  = document.getElementById('trackRadiusInput');
+const trackCwBtn        = document.getElementById('trackCwBtn');
+const trackCcwBtn       = document.getElementById('trackCcwBtn');
+const trackInfoEl       = document.getElementById('trackInfo');
 
 // ── Canvas resize (DPR-aware) ─────────────────────────────────────────────
 
@@ -121,6 +139,7 @@ loadJsonInput.addEventListener('change', (e) => {
     try {
       const data = JSON.parse(ev.target.result);
       if (data.NODES) state.nodes = data.NODES;
+      if (data.TRACK) state.track = normaliseTrack(data.TRACK);
       const loaded = normaliseAGVS(data);
       if (loaded.length > 0) {
         state.agvs = loaded.slice(0, 4);
@@ -128,9 +147,15 @@ loadJsonInput.addEventListener('change', (e) => {
         state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
       }
       state.activeAgvIdx = 0;
+      // Sync TP counter past any loaded IDs
+      for (const id of Object.keys(state.track.points)) {
+        const n = parseInt(id.replace('TP-', ''), 10);
+        if (!isNaN(n) && n >= state.trackPtN) state.trackPtN = n + 1;
+      }
       updateAgvPanel();
       updateSeqPanel();
       updateNodeList();
+      updateTrackBar();
     } catch { alert('Invalid JSON.'); }
   };
   reader.readAsText(file);
@@ -147,6 +172,7 @@ document.getElementById('startBtn').addEventListener('click', () => {
   updateAgvPanel();
   updateSeqPanel();
   updateNodeList();
+  updateTrackBar();
   requestAnimationFrame(drawLoop);
 });
 
@@ -158,15 +184,21 @@ document.getElementById('confirmClearCancel').addEventListener('click', () => co
 
 document.getElementById('confirmClearOk').addEventListener('click', () => {
   confirmClearModal.close();
-  state.nodes = {};
-  state.agvs  = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
+  state.nodes        = {};
+  state.agvs         = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
   state.activeAgvIdx = 0;
+  state.track        = { points: {}, segments: [] };
+  state.trackSel     = null;
+  state.trackPtN     = 1;
+  state.trackSegN    = 1;
+  state.trackLastSeg = null;
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
   state.mode = 'NODE'; state.hoveredNode = null; state.actionPickerNode = null;
   loadJsonInput.value = ''; loadImgInput.value = '';
   filenameInput.value = 'coords.json'; state.outputFilename = 'coords.json';
   closeRadial(); hideActionPicker(); hideDetailsBar();
   updateAgvPanel(); updateSeqPanel(); updateNodeList(); updateModeBadge();
+  updateTrackBar();
   hudFile.textContent = '→ coords.json';
   startupModal.showModal();
 });
@@ -252,11 +284,23 @@ function submitDetailsBar() {
   });
 });
 
+function snapNodeToTrack(ix, iy) {
+  let bestId = null, bestDist = 20;
+  for (const [id, pt] of Object.entries(state.track.points)) {
+    const d = Math.hypot(ix - pt.x, iy - pt.y);
+    if (d < bestDist) { bestDist = d; bestId = id; }
+  }
+  return bestId;
+}
+
 function selectType(type) {
   if (type === 'waypoint') {
-    // Auto-name and save immediately — no angle prompt
-    const id = nextWpName();
-    state.nodes[id] = { x: Math.round(radial.ix), y: Math.round(radial.iy), type: 'waypoint' };
+    const id   = nextWpName();
+    const ix   = Math.round(radial.ix), iy = Math.round(radial.iy);
+    const snap = snapNodeToTrack(ix, iy);
+    state.nodes[id] = snap
+      ? { x: state.track.points[snap].x, y: state.track.points[snap].y, type: 'waypoint', trackPoint: snap }
+      : { x: ix, y: iy, type: 'waypoint' };
     closeRadial();
     updateNodeList();
     updateSeqPanel();
@@ -324,8 +368,11 @@ nameInput.addEventListener('keydown', (e) => {
       setTimeout(() => nameInputBar.classList.remove('error'), 400);
       return;
     }
-    // Save the seq_point node — no angle prompt in node mode
-    state.nodes[val] = { x: Math.round(radial.ix), y: Math.round(radial.iy), type: 'seq_point' };
+    const ix   = Math.round(radial.ix), iy = Math.round(radial.iy);
+    const snap = snapNodeToTrack(ix, iy);
+    state.nodes[val] = snap
+      ? { x: state.track.points[snap].x, y: state.track.points[snap].y, type: 'seq_point', trackPoint: snap }
+      : { x: ix, y: iy, type: 'seq_point' };
     hideNameInput();
     closeRadial();
     updateNodeList();
@@ -379,7 +426,27 @@ window.addEventListener('keydown', (e) => {
   if (startupModal.open || confirmClearModal.open) return;
 
   if (e.key === 'Escape') {
+    if (state.mode === 'TRACK') { state.trackSel = null; return; }
     if (radial.active) { closeRadial(); return; }
+  }
+
+  if (e.key === 't' || e.key === 'T') {
+    if (radial.active) closeRadial();
+    hideActionPicker(); hideDetailsBar();
+    state.mode = state.mode === 'TRACK' ? 'NODE' : 'TRACK';
+    state.trackSel = null;
+    updateModeBadge();
+    updateTrackBar();
+    return;
+  }
+
+  if (state.mode === 'TRACK') {
+    // A = toggle arc/straight
+    if (e.key === 'a' || e.key === 'A') {
+      state.trackArc = !state.trackArc;
+      updateTrackBar();
+    }
+    return; // absorb all other keys in track mode
   }
 
   if (e.key === 'e' || e.key === 'E') {
@@ -398,6 +465,24 @@ canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   if (radial.active) { closeRadial(); return; }
   if (actionPicker.style.display === 'flex') { hideActionPicker(); return; }
+
+  if (state.mode === 'TRACK') {
+    if (state.trackSel) {
+      state.trackSel = null;
+    } else {
+      // Undo last track point and any segments connected to it
+      const ptIds = Object.keys(state.track.points);
+      if (!ptIds.length) return;
+      const lastId = ptIds[ptIds.length - 1];
+      delete state.track.points[lastId];
+      state.track.segments = state.track.segments.filter(s => s.from !== lastId && s.to !== lastId);
+      if (state.trackLastSeg && !state.track.segments.find(s => s.id === state.trackLastSeg))
+        state.trackLastSeg = null;
+      state.trackPtN = Math.max(1, state.trackPtN - 1);
+      updateTrackBar();
+    }
+    return;
+  }
 
   if (state.mode === 'NODE') {
     const keys = Object.keys(state.nodes);
@@ -420,6 +505,30 @@ canvas.addEventListener('mousedown', (e) => {
   if (actionPicker.style.display === 'flex') { hideActionPicker(); return; }
 
   const mx = e.clientX, my = e.clientY;
+
+  if (state.mode === 'TRACK') {
+    const hitTP = findTrackPtAt(mx, my);
+    if (hitTP) {
+      if (!state.trackSel) {
+        state.trackSel = hitTP;
+      } else if (state.trackSel === hitTP) {
+        state.trackSel = null;
+      } else {
+        connectTrackPoints(state.trackSel, hitTP);
+        state.trackSel = hitTP; // chain: new start
+      }
+    } else {
+      // Place new track point
+      const img  = screenToImg(mx, my, state.view);
+      const newId = `TP-${String(state.trackPtN).padStart(2, '0')}`;
+      state.trackPtN++;
+      state.track.points[newId] = { x: Math.round(img.ix), y: Math.round(img.iy) };
+      if (state.trackSel) connectTrackPoints(state.trackSel, newId);
+      state.trackSel = newId;
+      updateTrackBar();
+    }
+    return;
+  }
 
   if (state.mode === 'NODE') {
     if (radial.active) {
@@ -480,7 +589,10 @@ canvas.addEventListener('mousemove', (e) => {
     state.view.offsetY = state.panViewStart.offsetY + (e.clientY - state.panStart.sy);
   }
 
-  if (state.mode === 'SEQUENCE' && !radial.active) {
+  if (state.mode === 'TRACK') {
+    const hitTP = findTrackPtAt(e.clientX, e.clientY);
+    canvas.style.cursor = hitTP ? 'pointer' : 'crosshair';
+  } else if (state.mode === 'SEQUENCE' && !radial.active) {
     state.hoveredNode = findNodeAt(e.clientX, e.clientY, state.nodes, state.view);
     canvas.style.cursor = state.hoveredNode ? 'pointer' : 'default';
   } else {
@@ -720,8 +832,74 @@ function updateNodeList() {
 }
 
 function updateModeBadge() {
-  modeBadge.textContent = state.mode === 'NODE' ? 'NODE MODE' : 'SEQUENCE MODE';
-  modeBadge.className   = state.mode === 'NODE' ? 'node-mode' : 'seq-mode';
+  const labels  = { NODE: 'NODE MODE', SEQUENCE: 'SEQUENCE MODE', TRACK: 'TRACK MODE' };
+  const classes = { NODE: 'node-mode', SEQUENCE: 'seq-mode',      TRACK: 'track-mode' };
+  modeBadge.textContent = labels[state.mode]  || 'NODE MODE';
+  modeBadge.className   = classes[state.mode] || 'node-mode';
+}
+
+// ── Track helpers ─────────────────────────────────────────────────────────
+
+function findTrackPtAt(sx, sy) {
+  let bestId = null, bestDist = 14;
+  for (const [id, pt] of Object.entries(state.track.points)) {
+    const { sx: tx, sy: ty } = imgToScreen(pt.x, pt.y, state.view);
+    const d = Math.hypot(sx - tx, sy - ty);
+    if (d < bestDist) { bestDist = d; bestId = id; }
+  }
+  return bestId;
+}
+
+function connectTrackPoints(fromId, toId) {
+  const dup = state.track.segments.some(
+    s => (s.from === fromId && s.to === toId) || (s.from === toId && s.to === fromId)
+  );
+  if (dup) return;
+  const segId = `S-${String(state.trackSegN).padStart(2, '0')}`;
+  state.trackSegN++;
+  const seg = { id: segId, from: fromId, to: toId, type: state.trackArc ? 'arc' : 'straight' };
+  if (state.trackArc) { seg.radius = state.trackR; seg.clockwise = state.trackCW; }
+  state.track.segments.push(seg);
+  state.trackLastSeg = segId;
+  updateTrackBar();
+}
+
+function updateTrackBar() {
+  trackBar.style.display = state.mode === 'TRACK' ? 'flex' : 'none';
+  trackStraightBtn.classList.toggle('active', !state.trackArc);
+  trackArcBtn.classList.toggle('active',  state.trackArc);
+  trackArcControls.style.display = state.trackArc ? 'flex' : 'none';
+  if (state.trackArc) {
+    trackRadiusInput.value = state.trackR;
+    trackCwBtn.classList.toggle('active',  state.trackCW);
+    trackCcwBtn.classList.toggle('active', !state.trackCW);
+  }
+  const nPts  = Object.keys(state.track.points).length;
+  const nSegs = state.track.segments.length;
+  trackInfoEl.textContent = `${nPts} pts · ${nSegs} segs`;
+}
+
+// Wire up trackBar buttons
+trackStraightBtn.addEventListener('click', () => { state.trackArc = false; updateTrackBar(); });
+trackArcBtn.addEventListener('click',      () => { state.trackArc = true;  updateTrackBar(); });
+trackCwBtn.addEventListener('click',  () => { state.trackCW = true;  updateLastArcSeg(); updateTrackBar(); });
+trackCcwBtn.addEventListener('click', () => { state.trackCW = false; updateLastArcSeg(); updateTrackBar(); });
+
+trackRadiusInput.addEventListener('change', () => {
+  const v = parseFloat(trackRadiusInput.value);
+  if (!isFinite(v) || v < 10) return;
+  state.trackR = v;
+  updateLastArcSeg();
+});
+trackRadiusInput.addEventListener('keydown', (e) => e.stopPropagation());
+
+function updateLastArcSeg() {
+  if (!state.trackLastSeg) return;
+  const seg = state.track.segments.find(s => s.id === state.trackLastSeg);
+  if (seg && seg.type === 'arc') {
+    seg.radius    = state.trackR;
+    seg.clockwise = state.trackCW;
+  }
 }
 
 // ── Save JSON ─────────────────────────────────────────────────────────────
@@ -729,7 +907,9 @@ function updateModeBadge() {
 function saveJSON() {
   const agvsData = state.agvs.map(a => ({ id: a.id, color: a.color, sequence: a.sequence }));
   const data = { NODES: state.nodes, AGVS: agvsData };
-  if (state.agvs.length === 1) data.SEQUENCE = state.agvs[0].sequence; // backward compat
+  if (state.agvs.length === 1) data.SEQUENCE = state.agvs[0].sequence;
+  if (state.track.segments.length > 0 || Object.keys(state.track.points).length > 0)
+    data.TRACK = state.track;
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a    = document.createElement('a');
   a.href     = URL.createObjectURL(blob);
@@ -753,6 +933,54 @@ function drawLoop() {
     const { sx, sy } = imgToScreen(0, 0, state.view);
     ctx.drawImage(state.bgImage, sx, sy, state.imgW * state.view.zoom, state.imgH * state.view.zoom);
     drawGrid(ctx, state.imgW, state.imgH, state.view);
+  }
+
+  // ── Magnetic track ──────────────────────────────────────────────────────
+  // Segments
+  for (const seg of state.track.segments) {
+    const ptA = state.track.points[seg.from];
+    const ptB = state.track.points[seg.to];
+    if (!ptA || !ptB) continue;
+    const isLastSeg = seg.id === state.trackLastSeg;
+    strokeTrackSegment(ctx, ptA, ptB, seg, state.view);
+    ctx.strokeStyle = isLastSeg ? '#1a40e0' : TRACK_COLOR;
+    ctx.lineWidth   = 4;
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+  }
+  // Track points
+  for (const [id, pt] of Object.entries(state.track.points)) {
+    const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
+    const isSel = id === state.trackSel;
+    if (isSel) {
+      ctx.beginPath();
+      ctx.arc(sx, sy, 11, 0, Math.PI * 2);
+      ctx.strokeStyle = TRACK_COLOR; ctx.lineWidth = 2; ctx.stroke();
+    }
+    ctx.save();
+    ctx.translate(sx, sy); ctx.rotate(Math.PI / 4);
+    ctx.beginPath(); ctx.rect(-5, -5, 10, 10);
+    ctx.fillStyle   = isSel ? '#1a40e0' : TRACK_COLOR;
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.restore();
+    if (state.mode === 'TRACK') {
+      ctx.fillStyle = '#1a40a0'; ctx.font = '10px monospace';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(id, sx + 9, sy);
+    }
+  }
+  // Preview line from selected TP to cursor
+  if (state.mode === 'TRACK' && state.trackSel) {
+    const sp = state.track.points[state.trackSel];
+    if (sp) {
+      const { sx, sy } = imgToScreen(sp.x, sp.y, state.view);
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(sx, sy);
+      ctx.lineTo(state.mouseScreen.sx, state.mouseScreen.sy);
+      ctx.strokeStyle = 'rgba(48,96,208,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
   // Path lines for all AGVs — load-state colors + per-AGV color (Features 1 & 2)
@@ -835,8 +1063,8 @@ function drawLoop() {
     if (radial.phase === 'angle_select') drawAngleSelectRadial();
   }
 
-  // Crosshair (NODE mode, no radial)
-  if (state.mode === 'NODE' && !radial.active && !startupModal.open) {
+  // Crosshair (NODE/TRACK mode, no radial)
+  if ((state.mode === 'NODE' || state.mode === 'TRACK') && !radial.active && !startupModal.open) {
     ctx.strokeStyle = 'rgba(200,40,40,0.5)';
     ctx.lineWidth   = 1;
     ctx.setLineDash([]);

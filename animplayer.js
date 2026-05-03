@@ -20,7 +20,8 @@ const ACTION_COLORS = {
 
 const state = {
   nodes:   {},
-  agvs:    [],   // array of walker objects — see makeWalker()
+  agvs:    [],
+  track:   { points: {}, segments: [] },
   view:    { offsetX: 0, offsetY: 0, zoom: 1 },
   bgImage: null,
   imgW:    0,
@@ -46,16 +47,19 @@ const state = {
 
 function makeWalker(agvDef) {
   return {
-    id:           agvDef.id    || 'AGV-01',
-    color:        agvDef.color || AGV_COLORS[0],
-    sequence:     agvDef.sequence || [],
-    currentStep:  0,
-    agvPos:       { x: 0, y: 0 },
-    agvHeading:   0,
-    trolleyState: 'empty',
-    trolleyPos:   null,
-    phase:        'idle',
-    actionTimer:  0,
+    id:             agvDef.id    || 'AGV-01',
+    color:          agvDef.color || AGV_COLORS[0],
+    sequence:       agvDef.sequence || [],
+    currentStep:    0,
+    agvPos:         { x: 0, y: 0 },
+    agvHeading:     0,
+    trolleyState:   'empty',
+    trolleyPos:     null,
+    phase:          'idle',
+    actionTimer:    0,
+    trackPath:      [],   // track point IDs to follow to next sequence node
+    trackPathIdx:   0,
+    currentTrackPt: null,
   };
 }
 
@@ -92,13 +96,16 @@ function resetWalker(w) {
   const startPt     = state.nodes[startNodeId];
   if (!startPt) { w.phase = 'idle'; return; }
 
-  w.currentStep  = 0;
-  w.agvPos       = { x: startPt.x, y: startPt.y };
-  w.agvHeading   = w.sequence[0]?.heading ?? 0;
-  w.trolleyState = 'empty';
-  w.trolleyPos   = null;
-  w.phase        = 'action_pause';
-  w.actionTimer  = 0;
+  w.currentStep    = 0;
+  w.agvPos         = { x: startPt.x, y: startPt.y };
+  w.agvHeading     = w.sequence[0]?.heading ?? 0;
+  w.trolleyState   = 'empty';
+  w.trolleyPos     = null;
+  w.phase          = 'action_pause';
+  w.actionTimer    = 0;
+  w.trackPath      = [];
+  w.trackPathIdx   = 0;
+  w.currentTrackPt = startPt.trackPoint || null;
 }
 
 function resetAllWalkers() {
@@ -121,22 +128,42 @@ function updateWalker(w, dt) {
 
       w.currentStep++;
       if (w.currentStep >= w.sequence.length) { w.phase = 'done'; return; }
-      w.phase       = 'moving';
-      w.actionTimer = 0;
+
+      // Initialise track routing for this move segment
+      const prevNode = state.nodes[w.sequence[w.currentStep - 1].node];
+      const nextNode = state.nodes[w.sequence[w.currentStep].node];
+      const fromTP   = prevNode?.trackPoint || null;
+      const toTP     = nextNode?.trackPoint || null;
+      w.currentTrackPt = fromTP;
+      if (fromTP && toTP && state.track.segments.length > 0) {
+        const route   = routeOnTrack(fromTP, toTP);
+        w.trackPath   = route ? route.slice(1) : [];
+      } else {
+        w.trackPath = [];
+      }
+      w.trackPathIdx = 0;
+      w.phase        = 'moving';
+      w.actionTimer  = 0;
     }
     return;
   }
 
   if (w.phase === 'moving') {
-    const targetNodeId = w.sequence[w.currentStep].node;
-    const targetPt     = state.nodes[targetNodeId];
-    if (!targetPt) { w.phase = 'done'; return; }
+    const targetNode = state.nodes[w.sequence[w.currentStep].node];
+    if (!targetNode) { w.phase = 'done'; return; }
 
-    const path   = [{ x: w.agvPos.x, y: w.agvPos.y }, targetPt];
+    // Determine immediate sub-target: next track point or final node
+    const hasTrackWaypoint = w.trackPath.length > 0 && w.trackPathIdx < w.trackPath.length;
+    const movingToPos = hasTrackWaypoint
+      ? state.track.points[w.trackPath[w.trackPathIdx]]
+      : targetNode;
+    if (!movingToPos) { w.phase = 'done'; return; }
+
+    const path   = [{ x: w.agvPos.x, y: w.agvPos.y }, movingToPos];
     const result = advanceAlongPath(w.agvPos, path, 1, state.agvSpeed, dt);
 
-    const dx = targetPt.x - w.agvPos.x;
-    const dy = targetPt.y - w.agvPos.y;
+    const dx = movingToPos.x - w.agvPos.x;
+    const dy = movingToPos.y - w.agvPos.y;
     if (Math.hypot(dx, dy) > 0.5) {
       const targetHeading = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
       let diff = targetHeading - w.agvHeading;
@@ -150,11 +177,17 @@ function updateWalker(w, dt) {
     w.agvPos = result.pos;
 
     if (result.targetIdx >= path.length) {
-      w.agvPos = { x: targetPt.x, y: targetPt.y };
-      const entryHeading = w.sequence[w.currentStep]?.heading;
-      if (entryHeading !== undefined) w.agvHeading = entryHeading;
-      w.phase       = 'action_pause';
-      w.actionTimer = 0;
+      w.agvPos = { x: movingToPos.x, y: movingToPos.y };
+      if (hasTrackWaypoint) {
+        w.currentTrackPt = w.trackPath[w.trackPathIdx];
+        w.trackPathIdx++;
+      } else {
+        // Arrived at destination node
+        const entryHeading = w.sequence[w.currentStep]?.heading;
+        if (entryHeading !== undefined) w.agvHeading = entryHeading;
+        w.phase       = 'action_pause';
+        w.actionTimer = 0;
+      }
     }
   }
 }
@@ -198,6 +231,35 @@ function detectConflicts() {
   return conflicting;
 }
 
+// ── Track routing ─────────────────────────────────────────────────────────
+
+function buildTrackAdjacency() {
+  const adj = new Map();
+  for (const seg of state.track.segments) {
+    if (!adj.has(seg.from)) adj.set(seg.from, []);
+    if (!adj.has(seg.to))   adj.set(seg.to,   []);
+    adj.get(seg.from).push(seg.to);
+    adj.get(seg.to).push(seg.from);
+  }
+  return adj;
+}
+
+function routeOnTrack(fromId, toId) {
+  if (fromId === toId) return [fromId];
+  const adj     = buildTrackAdjacency();
+  const visited = new Set([fromId]);
+  const queue   = [[fromId]];
+  while (queue.length > 0) {
+    const path = queue.shift();
+    const cur  = path[path.length - 1];
+    for (const nb of (adj.get(cur) || [])) {
+      if (nb === toId) return [...path, toId];
+      if (!visited.has(nb)) { visited.add(nb); queue.push([...path, nb]); }
+    }
+  }
+  return null;
+}
+
 // ── Canvas resize ─────────────────────────────────────────────────────────
 
 function resizeCanvas() {
@@ -232,6 +294,7 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
     try {
       const data  = JSON.parse(ev.target.result);
       state.nodes = data.NODES || {};
+      state.track = normaliseTrack(data.TRACK);
       state.agvs  = normaliseAGVS(data).map(agvDef => makeWalker(agvDef));
       if (state.agvs.length === 0)
         state.agvs = [makeWalker({ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] })];
@@ -583,6 +646,30 @@ function drawScene(timestamp) {
 
   if (state.showGrid && state.imgW) {
     drawGrid(ctx, state.imgW, state.imgH, state.view);
+  }
+
+  // ── Magnetic track ──────────────────────────────────────────────────────
+  if (state.track.segments.length > 0) {
+    // Track segments
+    for (const seg of state.track.segments) {
+      const ptA = state.track.points[seg.from];
+      const ptB = state.track.points[seg.to];
+      if (!ptA || !ptB) continue;
+      strokeTrackSegment(ctx, ptA, ptB, seg, state.view);
+      ctx.strokeStyle = 'rgba(48,80,200,0.55)';
+      ctx.lineWidth   = 6;
+      ctx.lineCap     = 'round';
+      ctx.stroke();
+    }
+    // Track junction diamonds
+    for (const pt of Object.values(state.track.points)) {
+      const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
+      ctx.save();
+      ctx.translate(sx, sy); ctx.rotate(Math.PI / 4);
+      ctx.beginPath(); ctx.rect(-4, -4, 8, 8);
+      ctx.fillStyle = 'rgba(48,80,200,0.65)'; ctx.fill();
+      ctx.restore();
+    }
   }
 
   // Path lines per AGV — load-state color + AGV color (Features 1 & 2)
