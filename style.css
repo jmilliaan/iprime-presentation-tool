@@ -185,6 +185,53 @@ dialog input[type="file"] {
 
 #actionPicker button:hover { border-color: #cc44aa; color: #aa2288; background: #fef0f8; }
 
+/* ── New cpicker (Path/Station/Group/Call) ─────────────────────────────── */
+#groupPicker {
+  position: fixed; background: #ffffff; border: 1px solid #e0a020; border-radius: 6px;
+  padding: 8px; display: none; z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.15); min-width: 150px;
+}
+#groupPicker .picker-label {
+  font-size: 11px; color: #9a6800; padding: 2px 4px 6px; border-bottom: 1px solid #f0e0c0;
+  margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+#groupPickerBody { display: flex; flex-direction: column; gap: 4px; }
+#groupPicker button {
+  padding: 6px 10px; border-radius: 4px; border: 1px solid #d8d8e0; background: #f8f8fc;
+  color: #1a1a2a; font-family: monospace; font-size: 12px; cursor: pointer; text-align: left;
+}
+#groupPicker button:hover { border-color: #e0a020; color: #9a6800; background: #fff8e8; }
+
+/* Bottom-center mode bars reuse the trackBar look */
+#pathBar, #stationBar, #groupBar, #callBar {
+  position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+  display: none; align-items: center; gap: 8px; z-index: 300;
+  background: rgba(255,255,255,0.97); border: 1.5px solid #3060d0; border-radius: 8px;
+  padding: 6px 14px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); white-space: nowrap;
+  pointer-events: all; font-family: monospace;
+}
+#stationBar { border-color: #1a9c50; }
+#groupBar   { border-color: #cc44aa; }
+#callBar    { border-color: #e0a020; }
+#pathArcControls { display: none; align-items: center; gap: 8px; }
+#pathRadiusInput {
+  font-family: monospace; font-size: 12px; border: 1px solid #c0c0cc; border-radius: 4px;
+  padding: 2px 6px; width: 64px; outline: none; background: #f8f8fc; color: #1a1a2a;
+}
+
+/* Groups panel (right) + Sim panel (bottom-left) */
+#groupsPanel {
+  position: fixed; top: 40px; right: 10px; width: 210px; max-height: calc(100vh - 80px);
+  background: rgba(255,255,255,0.96); border: 1px solid #cc44aa; border-radius: 6px;
+  overflow-y: auto; font-size: 12px; z-index: 50; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+#groupsPanel .panel-title { color: #aa2288; border-bottom: 1px solid #f0d0e8; }
+#simPanel {
+  position: fixed; bottom: 30px; left: 10px; width: 210px; max-height: 300px;
+  background: rgba(255,255,255,0.96); border: 1px solid #c0c0cc; border-radius: 6px;
+  overflow-y: auto; font-size: 12px; z-index: 50; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+#simBody { padding: 6px 10px; }
+
 /* ── Sequence panel ───────────────────────────────────────────────────── */
 
 #seqPanel {

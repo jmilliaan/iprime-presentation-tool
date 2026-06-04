@@ -1,28 +1,11 @@
 // shared.js — utilities used by both cpicker.js and animplayer.js
 
-const COLORS = {
-  waypoint:      '#FFC832',
-  seq_point:     '#50DC78',
-  sequence_line: '#FF64C8',
-  seq_highlight: '#FF64C8',
-  action: {
-    pickup:   '#50DC78',
-    release:  '#F4A261',
-    exchange: '#50C8FF',
-  },
-};
-
 const AGV_COLORS = ['#E63946', '#4080e0', '#1a9c50', '#cc44aa'];
 
-const ZOOM_MIN      = 0.1;
-const ZOOM_MAX      = 8.0;
-const ZOOM_STEP     = 0.15;
-const SEQ_HIT_RADIUS = 18;
-const DOT_RADIUS    = 6;
-
-function dotColorForType(type) {
-  return COLORS[type] || '#AAAAAA';
-}
+const ZOOM_MIN  = 0.1;
+const ZOOM_MAX  = 8.0;
+const ZOOM_STEP = 0.15;
+const DOT_RADIUS = 6;
 
 // ── Coordinate transforms ─────────────────────────────────────────────────
 
@@ -38,19 +21,6 @@ function screenToImg(sx, sy, view) {
     ix: (sx - view.offsetX) / view.zoom,
     iy: (sy - view.offsetY) / view.zoom,
   };
-}
-
-// ── Hit detection ─────────────────────────────────────────────────────────
-
-function findNodeAt(sx, sy, nodes, view, hitRadius = SEQ_HIT_RADIUS) {
-  let bestId   = null;
-  let bestDist = hitRadius + 1;
-  for (const [id, pt] of Object.entries(nodes)) {
-    const { sx: nx, sy: ny } = imgToScreen(pt.x, pt.y, view);
-    const d = Math.hypot(sx - nx, sy - ny);
-    if (d < bestDist) { bestDist = d; bestId = id; }
-  }
-  return bestId;
 }
 
 // ── Path following (port of advance_along_path from pygame_sim.py) ────────
@@ -201,33 +171,7 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-// ── Sequence normalisation ────────────────────────────────────────────────
-// Handles old format (string[]) and new format ({node,action}[])
-
-function normaliseSequence(rawSeq) {
-  return rawSeq.map(entry =>
-    typeof entry === 'string'
-      ? { node: entry, action: 'move', heading: 0 }
-      : { heading: 0, ...entry }   // backfill heading if missing
-  );
-}
-
-// ── Track normalisation & geometry ───────────────────────────────────────
-
-function normaliseTrack(raw) {
-  if (!raw) return { points: {}, segments: [] };
-  return {
-    points:   raw.points || {},
-    segments: (raw.segments || []).map(s => ({
-      id:        s.id        || '',
-      from:      s.from      || '',
-      to:        s.to        || '',
-      type:      s.type === 'arc' ? 'arc' : 'straight',
-      radius:    s.radius    ?? 100,
-      clockwise: s.clockwise !== false,
-    })),
-  };
-}
+// ── Track geometry ────────────────────────────────────────────────────────
 
 // Compute arc center given two image-coord points, radius, and visual CW direction.
 // In canvas (y-down), CW visually = center is to the right of the A→B chord.
@@ -266,24 +210,6 @@ function strokeTrackSegment(ctx, A, B, seg, view) {
   }
 }
 
-// ── AGV array normalisation ───────────────────────────────────────────────
-// Accepts parsed JSON object; returns [{id, color, sequence}] array.
-// Backward-compatible: wraps legacy SEQUENCE key into a single AGV entry.
-
-function normaliseAGVS(data) {
-  if (data.AGVS && data.AGVS.length > 0) {
-    return data.AGVS.map((agv, i) => ({
-      id:       agv.id    || `AGV-0${i + 1}`,
-      color:    agv.color || AGV_COLORS[i % AGV_COLORS.length],
-      sequence: normaliseSequence(agv.sequence || []),
-    }));
-  }
-  if (data.SEQUENCE && data.SEQUENCE.length > 0) {
-    return [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: normaliseSequence(data.SEQUENCE) }];
-  }
-  return [];
-}
-
 // ── Deterministic RNG (LCG, Numerical Recipes) ────────────────────────────
 // Returns a function producing floats in [0,1).  Seeded → reproducible runs,
 // which is what makes a recorded dispatch video identical every time.
@@ -296,43 +222,90 @@ function makeRng(seed) {
   };
 }
 
-// ── Dispatch normalisation ────────────────────────────────────────────────
-// Parses the optional top-level DISPATCH block.  Returns null when absent so
-// the player stays in the legacy scripted-sequence mode.
-//   home       — node id of the dispatch base (fallback parking spot)
-//   homeSlots  — ordered node ids, one parking spot per AGV (recommended for
-//                multi-AGV so they don't contend for the same track point)
-//   lines      — service points that can request an AGV
-//   requests   — deterministic timeline { t, line, agv? } for repeatable video
-//   autoGenerate — seeded random on-demand request generator
+// ── Layout normalisation (Path / Stations / Groups / Call-stations) ────────
+// The current authoring schema. Maps the on-disk shape to the internal runtime
+// shape the engine already uses:
+//   PATH.nodes/edges  → { points, segments }  (same as the old TRACK)
+//   STATIONS[].link   → trackPoint            (so movement/BFS is untouched)
+// Everything is defaulted and invalid cross-references are filtered out, so a
+// partial or hand-broken file still loads instead of throwing.
 
-function normaliseDispatch(data) {
-  const d = data.DISPATCH;
-  if (!d) return null;
+function normaliseLayout(data) {
+  // PATH (geometry) → internal track shape
+  const rawPath  = data.PATH || {};
+  const points   = rawPath.nodes || {};
+  const segments = (rawPath.edges || []).map(e => ({
+    id:        e.id || '',
+    from:      e.from || '',
+    to:        e.to || '',
+    type:      e.type === 'arc' ? 'arc' : 'straight',
+    radius:    e.radius ?? 100,
+    clockwise: e.clockwise !== false,
+  })).filter(e => points[e.from] && points[e.to]);
+  const path = { points, segments };
 
-  const lines = (d.lines || []).map((l, i) => ({
-    id:            l.id || `LINE-${String.fromCharCode(65 + i)}`,
-    node:          l.node,
-    serviceAction: ['move', 'pickup', 'release', 'exchange'].includes(l.serviceAction)
-      ? l.serviceAction : 'exchange',
-    serviceTime:   typeof l.serviceTime === 'number' ? l.serviceTime : 3,
-  })).filter(l => l.node);
+  // STATIONS (action sites) → internal nodes, keeping the `trackPoint` field name
+  const stations = {};
+  for (const [id, s] of Object.entries(data.STATIONS || {})) {
+    if (!s) continue;
+    stations[id] = {
+      x:          s.x,
+      y:          s.y,
+      role:       s.role === 'home' ? 'home' : 'action',
+      trackPoint: (s.link && points[s.link]) ? s.link : null,
+      kind:       'station',
+    };
+  }
 
-  const requests = (d.requests || [])
-    .map(r => ({ t: +r.t || 0, line: r.line, agv: r.agv || null }))
-    .filter(r => r.line)
-    .sort((a, b) => a.t - b.t);
+  // AGVS — identities only
+  const agvs = (data.AGVS || []).map((a, i) => ({
+    id:    a.id    || `AGV-0${i + 1}`,
+    color: a.color || AGV_COLORS[i % AGV_COLORS.length],
+  }));
 
-  const ag = d.autoGenerate || {};
-  return {
-    home:      d.home || null,
-    homeSlots: Array.isArray(d.homeSlots) ? d.homeSlots.slice() : [],
-    lines,
-    requests,
+  // GROUPS — reusable multi-stop jobs
+  const groups = {};
+  for (const [id, g] of Object.entries(data.GROUPS || {})) {
+    if (!g) continue;
+    const stops = (g.stops || [])
+      .filter(st => st && stations[st.station])
+      .map(st => {
+        const o = {
+          station: st.station,
+          action:  ['pickup', 'release', 'exchange', 'move'].includes(st.action) ? st.action : 'move',
+        };
+        if (typeof st.dwell === 'number') o.dwell = st.dwell;
+        if (st.label) o.label = st.label;
+        if (st.mode === 'manual') o.mode = 'manual';
+        return o;
+      });
+    groups[id] = { name: g.name || id, stops };
+  }
+
+  // CALL_STATIONS — only those pointing at a real station + group
+  const callStations = (data.CALL_STATIONS || [])
+    .filter(c => c && stations[c.station] && groups[c.group])
+    .map(c => ({ station: c.station, group: c.group }));
+
+  // HOME slots — valid station ids only
+  const homeSlots = ((data.HOME && data.HOME.slots) || []).filter(id => stations[id]);
+
+  // SIM — optional playback config
+  const rawSim = data.SIM || {};
+  const ag     = rawSim.autoGenerate || {};
+  const sim = {
+    agvSpeed:    typeof rawSim.agvSpeed === 'number' ? rawSim.agvSpeed : 120,
+    serviceTime: typeof rawSim.serviceTime === 'number' ? rawSim.serviceTime : 3,
+    requests: (rawSim.requests || [])
+      .map(r => ({ t: +r.t || 0, group: r.group, agv: r.agv || null }))
+      .filter(r => groups[r.group])
+      .sort((a, b) => a.t - b.t),
     autoGenerate: {
       enabled:      !!ag.enabled,
       meanInterval: typeof ag.meanInterval === 'number' && ag.meanInterval > 0 ? ag.meanInterval : 6,
       seed:         typeof ag.seed === 'number' ? ag.seed : 1234,
     },
   };
+
+  return { path, stations, agvs, groups, callStations, homeSlots, sim };
 }

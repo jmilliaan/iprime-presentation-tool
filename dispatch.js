@@ -1,23 +1,23 @@
 // dispatch.js — on-demand FIFO dispatch & queue engine for the Animation Player.
 //
-// Activates only when the loaded JSON contains a DISPATCH block (see
-// normaliseDispatch in shared.js).  In that mode AGVs park at home, lines
-// request service on demand, requests queue FIFO, an idle AGV is dispatched to
-// serve the head of the queue, AGVs genuinely yield on shared track via a
-// reservation map, then return to their home slot.
+// Groups (multi-stop jobs) are requested on demand — via on-canvas call markers,
+// a scripted timeline, or a seeded auto-generator. Requests queue FIFO; an idle
+// AGV is dispatched from its home slot to run the group's stops in order and
+// return home. AGVs genuinely wait/yield on shared path corners via a track-point
+// reservation map.
 //
-// Relies on globals defined in animplayer.js (state, routeWalkerToStep) and
-// shared.js (normaliseDispatch, makeRng).  All cross-file access happens at
-// call time, so script load order is not load-bearing.
+// Relies on globals from animplayer.js (state, routeWalkerToStep) and shared.js
+// (makeRng). All cross-file access happens at call time, so load order is free.
 
 const dispatch = {
-  mode:        'scripted',   // 'scripted' | 'dispatch'
-  home:        null,
+  mode:        'idle',       // 'idle' | 'dispatch'
   homeSlots:   [],
-  lines:       {},           // id -> { id, node, serviceAction, serviceTime }
-  lineOrder:   [],           // line ids in definition order
-  queue:       [],           // FIFO of { line, agv }
-  reserved:    new Map(),    // trackPointId -> agvId currently holding it
+  groups:      {},           // id -> { name, stops:[{station,action,dwell?,label?,mode?}] }
+  groupOrder:  [],
+  callStations: [],          // [{ station, group }]
+  serviceTime: 3,
+  queue:       [],           // FIFO of { group, agv }
+  reserved:    new Map(),    // trackPointId -> agvId holding it
   rng:         Math.random,
   simTime:     0,
   timelineIdx: 0,
@@ -29,27 +29,21 @@ const dispatch = {
 const Dispatch = {
   isActive() { return dispatch.mode === 'dispatch'; },
 
-  // Parse the DISPATCH block from a freshly loaded JSON. Returns true if the
-  // layout is a dispatch scenario.
-  init(data) {
-    const d = normaliseDispatch(data);
-    dispatch.lines     = {};
-    dispatch.lineOrder = [];
-    dispatch.queue     = [];
-    dispatch.reserved  = new Map();
-    if (!d) { dispatch.mode = 'scripted'; return false; }
-
-    dispatch.mode         = 'dispatch';
-    dispatch.home         = d.home;
-    dispatch.homeSlots    = d.homeSlots;
-    dispatch.requests     = d.requests;
-    dispatch.autoGenerate = d.autoGenerate;
-    d.lines.forEach(l => { dispatch.lines[l.id] = l; dispatch.lineOrder.push(l.id); });
-    return true;
+  // Accepts the normalised layout (from normaliseLayout in shared.js).
+  init(layout) {
+    dispatch.groups       = layout.groups || {};
+    dispatch.groupOrder   = Object.keys(dispatch.groups);
+    dispatch.callStations = layout.callStations || [];
+    dispatch.homeSlots    = layout.homeSlots || [];
+    dispatch.serviceTime  = layout.sim.serviceTime;
+    dispatch.requests     = layout.sim.requests || [];
+    dispatch.autoGenerate = layout.sim.autoGenerate;
+    dispatch.queue        = [];
+    dispatch.reserved     = new Map();
+    dispatch.mode         = (layout.agvs && layout.agvs.length > 0) ? 'dispatch' : 'idle';
+    return dispatch.mode === 'dispatch';
   },
 
-  // Park every AGV at its home slot and clear all runtime state. Called from
-  // resetAllWalkers (restart / record start) so each run is identical.
   reset() {
     dispatch.queue       = [];
     dispatch.reserved    = new Map();
@@ -63,12 +57,10 @@ const Dispatch = {
   // ── Public queue API ──────────────────────────────────────────────────────
 
   enqueue(req) {
-    if (dispatch.mode !== 'dispatch' || !req || !dispatch.lines[req.line]) return;
-    dispatch.queue.push({ line: req.line, agv: req.agv || null });
+    if (dispatch.mode !== 'dispatch' || !req || !dispatch.groups[req.group]) return;
+    dispatch.queue.push({ group: req.group, agv: req.agv || null });
   },
 
-  // Per-tick engine step. Order matters: free finished AGVs first so they are
-  // available for assignment this same tick.
   update(dt) {
     this._reclaim();
     dispatch.simTime += dt;
@@ -91,8 +83,6 @@ const Dispatch = {
 
   // ── Completion / HUD helpers ──────────────────────────────────────────────
 
-  // True once the scripted timeline is drained, the queue is empty and all AGVs
-  // are back home — used to auto-stop a deterministic recording.
   allComplete() {
     return dispatch.mode === 'dispatch'
       && !dispatch.autoGenerate.enabled
@@ -103,35 +93,36 @@ const Dispatch = {
 
   queueLength() { return dispatch.queue.length; },
 
-  pendingByLine() {
+  pendingByGroup() {
     const counts = {};
-    dispatch.lineOrder.forEach(id => { counts[id] = 0; });
-    dispatch.queue.forEach(r => { counts[r.line] = (counts[r.line] || 0) + 1; });
+    dispatch.groupOrder.forEach(id => { counts[id] = 0; });
+    dispatch.queue.forEach(r => { counts[r.group] = (counts[r.group] || 0) + 1; });
     return counts;
   },
 
-  lineIds() { return dispatch.lineOrder.slice(); },
+  groupIds()     { return dispatch.groupOrder.slice(); },
+  callStations() { return dispatch.callStations; },
 
-  // Short status label for one walker, used by the HUD.
+  // Short status label for one walker (HUD).
   stateLabel(w) {
     if (w.phase === 'parked') return 'HOME';
     if (!w.job)               return w.phase.toUpperCase();
     if (w.waiting)            return 'WAIT';
-    if (w.phase === 'action_pause' && w.currentStep === 0) return 'SERVING';
-    if (w.currentStep >= 1)   return 'RETURN';
-    return 'TO LINE';
+    if (w.phase === 'action_pause') return 'SERVING';
+    const last = w.sequence.length - 1;
+    if (w.currentStep >= last) return 'RETURN';
+    return 'TO STOP';
   },
 
   // ── Internals ─────────────────────────────────────────────────────────────
 
   _nextInterval() {
-    // Exponential inter-arrival → Poisson process, driven by the seeded RNG.
     const u = Math.max(1e-6, dispatch.rng());
     return dispatch.simTime + (-Math.log(u) * dispatch.autoGenerate.meanInterval);
   },
 
   _slotNodeId(i) {
-    return dispatch.homeSlots[i] || dispatch.home || null;
+    return dispatch.homeSlots[i] || dispatch.homeSlots[dispatch.homeSlots.length - 1] || null;
   },
 
   _parkAll() {
@@ -140,7 +131,7 @@ const Dispatch = {
       const node   = slotId ? state.nodes[slotId] : null;
       w.homeSlot       = slotId;
       w.agvPos         = node ? { x: node.x, y: node.y } : { x: 40 + i * 50, y: 40 };
-      w.agvHeading     = node?.heading ?? 0;
+      w.agvHeading     = 0;
       w.currentTrackPt = node?.trackPoint || null;
       w.sequence       = [];
       w.currentStep    = 0;
@@ -177,10 +168,10 @@ const Dispatch = {
   },
 
   _autoGen() {
-    if (!dispatch.autoGenerate.enabled || dispatch.lineOrder.length === 0) return;
+    if (!dispatch.autoGenerate.enabled || dispatch.groupOrder.length === 0) return;
     while (dispatch.simTime >= dispatch.nextGenTime) {
-      const idx = Math.floor(dispatch.rng() * dispatch.lineOrder.length) % dispatch.lineOrder.length;
-      this.enqueue({ line: dispatch.lineOrder[idx] });
+      const idx = Math.floor(dispatch.rng() * dispatch.groupOrder.length) % dispatch.groupOrder.length;
+      this.enqueue({ group: dispatch.groupOrder[idx] });
       dispatch.nextGenTime = this._nextInterval();
     }
   },
@@ -191,31 +182,33 @@ const Dispatch = {
     return idle[0] || null;
   },
 
-  // Strict FIFO: if the head request has no eligible idle AGV (e.g. a request
-  // pinned to a specific AGV that is still busy), the whole queue waits.
+  // Strict FIFO: if the head request can't be assigned (e.g. pinned to a busy
+  // AGV), the whole queue waits.
   _assign() {
     while (dispatch.queue.length > 0) {
       const req = dispatch.queue[0];
       const w   = this._pickIdle(req.agv);
       if (!w) break;
       dispatch.queue.shift();
-      this._startJob(w, dispatch.lines[req.line]);
+      this._startJob(w, req.group);
     }
   },
 
-  _startJob(w, line) {
-    const lineNode = state.nodes[line.node];
-    const slotId   = w.homeSlot;
-    const slotNode = slotId ? state.nodes[slotId] : null;
-    w.job         = line.id;
+  // Build the walker's sequence from a group: each stop, then return to home.
+  _startJob(w, groupId) {
+    const g = dispatch.groups[groupId];
+    if (!g || g.stops.length === 0 || !w.homeSlot) return;
+    const stops = g.stops.map(s => {
+      const o = { node: s.station, action: s.action, dwell: s.dwell ?? dispatch.serviceTime };
+      if (s.label) o.label = s.label;
+      if (s.mode === 'manual') o.mode = 'manual';
+      return o;
+    });
+    w.job         = groupId;
     w.waiting     = false;
-    w.sequence    = [
-      { node: line.node, action: line.serviceAction, heading: lineNode?.heading ?? 0,
-        dwell: line.serviceTime, label: line.id },
-      { node: slotId,    action: 'move', heading: slotNode?.heading ?? w.agvHeading },
-    ];
+    w.sequence    = [...stops, { node: w.homeSlot, action: 'move' }];
     w.currentStep = 0;
     w.actionTimer = 0;
-    routeWalkerToStep(w);   // animplayer.js — sets up trackPath + phase 'moving'
+    routeWalkerToStep(w);   // animplayer.js — sets trackPath + phase 'moving'
   },
 };

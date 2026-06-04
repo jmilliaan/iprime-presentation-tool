@@ -3,104 +3,107 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Coord Picker</title>
+  <title>Layout Picker</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
   <canvas id="canvas"></canvas>
 
-  <!-- Type legend (top-left) -->
-  <div id="typeLegend">
-    <div class="legend-row">
-      <div class="dot" style="background:#50DC78;"></div>
-      <span style="color:#1a6828;">seq_point</span>
-    </div>
-    <div class="legend-row">
-      <div class="dot" style="background:#FFC832;"></div>
-      <span style="color:#905800;">waypoint</span>
-    </div>
-  </div>
-
   <!-- Mode badge (top-center) -->
-  <div id="modeBadge" class="node-mode">NODE MODE</div>
+  <div id="modeBadge" class="node-mode">PATH MODE</div>
 
-  <!-- Sequence panel (right) -->
-  <div id="seqPanel">
-    <div class="panel-title" id="seqPanelTitle">SEQUENCE (0)</div>
-    <div id="seqList"></div>
+  <!-- Mode legend / shortcuts (top-left) -->
+  <div id="typeLegend">
+    <div class="legend-row"><b>[1]</b>&nbsp;Path&nbsp;&nbsp;<b>[2]</b>&nbsp;Stations</div>
+    <div class="legend-row"><b>[3]</b>&nbsp;Groups&nbsp;&nbsp;<b>[4]</b>&nbsp;Call</div>
+    <div class="legend-row" style="color:#888;">[S] save · RClick=undo · scroll=zoom · MMB=pan</div>
   </div>
 
-  <!-- AGV selector panel (top-left, below type legend) -->
-  <div id="agvPanel"></div>
-
-  <!-- Dispatch panel (right, below sequence panel) -->
-  <div id="dispatchPanel" style="display:none;">
-    <div class="panel-title">DISPATCH</div>
-    <div id="dispatchBody"></div>
+  <!-- Groups panel (right) — used in GROUP mode -->
+  <div id="groupsPanel" style="display:none;">
+    <div class="panel-title">GROUPS</div>
+    <div id="groupsBody"></div>
+    <button id="newGroupBtn" class="agv-add-btn">+ New group</button>
   </div>
 
-  <!-- Node list panel (bottom-left, above HUD) -->
-  <div id="nodeListPanel">
-    <div class="panel-title" id="nodeListTitle">NODES (0)</div>
-    <div id="nodeListBody"></div>
+  <!-- Sim / fleet panel (left, above HUD) -->
+  <div id="simPanel">
+    <div class="panel-title">FLEET &amp; SIM</div>
+    <div id="simBody"></div>
   </div>
 
   <!-- HUD bar (bottom) -->
   <div id="hud">
     <span id="hudCoords">(0, 0)</span>
     <span id="hudZoom" class="dim">zoom: 1.00×</span>
-    <span id="hudCounts" class="dim">nodes: 0 | seq: 0</span>
+    <span id="hudCounts" class="dim">path: 0 · stations: 0 · groups: 0</span>
     <span id="hudFile" class="dim">→ coords.json</span>
-    <span class="dim">· [E] mode · [T] track · [S] save · RClick=undo · Scroll=zoom · MMB=pan</span>
+    <button id="saveBtn">Save</button>
     <button id="clearBtn">Clear</button>
     <button id="homeBtn">Home</button>
   </div>
 
-  <!-- Track bar (visible in TRACK mode) -->
-  <div id="trackBar">
-    <button class="track-seg-btn active" id="trackStraightBtn">Straight</button>
-    <button class="track-seg-btn" id="trackArcBtn">Arc</button>
-    <div id="trackArcControls">
+  <!-- Path bar (visible in PATH mode) -->
+  <div id="pathBar">
+    <button class="track-seg-btn active" id="pathStraightBtn">Straight</button>
+    <button class="track-seg-btn" id="pathArcBtn">Arc</button>
+    <div id="pathArcControls">
       <div class="details-sep"></div>
       <span class="details-label">Radius</span>
-      <input type="number" id="trackRadiusInput" value="100" min="10" step="10">
-      <button class="track-seg-btn" id="trackCwBtn" title="Clockwise">CW</button>
-      <button class="track-seg-btn" id="trackCcwBtn" title="Counter-clockwise">CCW</button>
+      <input type="number" id="pathRadiusInput" value="120" min="10" step="10">
+      <button class="track-seg-btn" id="pathCwBtn" title="Clockwise">CW</button>
+      <button class="track-seg-btn" id="pathCcwBtn" title="Counter-clockwise">CCW</button>
     </div>
     <div class="details-sep"></div>
-    <span id="trackInfo" class="details-hint">0 pts · 0 segs</span>
+    <span id="pathInfo" class="details-hint">0 corners · 0 edges</span>
     <div class="details-sep"></div>
-    <span class="details-hint">Click=place/connect &nbsp;·&nbsp; Esc=deselect &nbsp;·&nbsp; RClick=undo &nbsp;·&nbsp; T=exit</span>
+    <span class="details-hint">Click=place/connect · A=arc · Esc=deselect · RClick=undo</span>
   </div>
 
-  <!-- Details bar (after angle selection: dwell, label, mode) -->
-  <div id="detailsBar">
-    <span class="details-label">Dwell (s)</span>
-    <input type="number" id="dwellInput" placeholder="default" min="0" step="0.5">
+  <!-- Station bar (visible in STATION mode) -->
+  <div id="stationBar">
+    <span class="details-label">Place</span>
+    <button class="track-seg-btn active" id="stActionBtn">Action</button>
+    <button class="track-seg-btn" id="stHomeBtn">Home</button>
     <div class="details-sep"></div>
-    <span class="details-label">Label</span>
-    <input type="text" id="labelInput" placeholder="optional">
-    <div class="details-sep"></div>
-    <label id="detailsModeLabel">
-      <input type="checkbox" id="modeManual"> manual
-    </label>
-    <div class="details-sep"></div>
-    <span class="details-hint">Enter=add &nbsp;·&nbsp; Esc=cancel</span>
+    <span class="details-hint">Click=place (auto-links to nearest corner) · RClick=undo</span>
   </div>
 
-  <!-- Inline name input bar (seq_point naming step) -->
-  <div id="nameInputBar">
-    <span class="name-input-label">Node name</span>
-    <input type="text" id="nameInput" placeholder="e.g. HP-RELEASE" autocomplete="off" spellcheck="false">
-    <span class="name-input-hint">Enter=confirm · Esc=cancel</span>
+  <!-- Group mode hint bar -->
+  <div id="groupBar">
+    <span id="groupBarLabel" class="details-label">No active group</span>
+    <div class="details-sep"></div>
+    <span class="details-hint">Pick a group at right, then click stations in order · RClick=undo last stop</span>
+  </div>
+
+  <!-- Call mode hint bar -->
+  <div id="callBar">
+    <span class="details-label">Call points</span>
+    <div class="details-sep"></div>
+    <span class="details-hint">Click a station → choose a group · RClick a station = remove its call</span>
+  </div>
+
+  <!-- Action picker (GROUP mode: choose action at a stop) -->
+  <div id="actionPicker">
+    <div class="picker-label">Action at this stop</div>
+    <button data-action="move">move — pass through</button>
+    <button data-action="pickup">pickup — attach trolley</button>
+    <button data-action="release">release — detach trolley</button>
+    <button data-action="exchange">exchange — swap trolley</button>
+  </div>
+
+  <!-- Group picker (CALL mode: choose which group a call fires) -->
+  <div id="groupPicker">
+    <div class="picker-label">Call which group?</div>
+    <div id="groupPickerBody"></div>
   </div>
 
   <!-- Startup modal -->
   <dialog id="startupModal">
-    <h2>Coord Picker</h2>
+    <h2>Layout Picker</h2>
     <label>Output filename</label>
-    <input type="text" id="filenameInput" value="coords.json" placeholder="e.g. evoty_01.json" autocomplete="off">
+    <input type="text" id="filenameInput" value="coords.json" placeholder="e.g. layout_01.json" autocomplete="off">
     <label>Load existing JSON (optional)</label>
     <input type="file" id="loadJsonInput" accept=".json">
     <label>Background image (optional)</label>
@@ -114,23 +117,14 @@
   <dialog id="confirmClearModal">
     <h2>Clear everything?</h2>
     <p style="font-size:13px;color:#505060;margin-bottom:20px;line-height:1.6;">
-      This will remove all nodes, the sequence, and the loaded image.<br>
-      The startup screen will reopen so you can start fresh.
+      This removes the path, stations, groups, call points and the loaded image.<br>
+      The startup screen reopens so you can start fresh.
     </p>
     <div class="dialog-buttons">
       <button id="confirmClearCancel">Cancel</button>
       <button class="danger" id="confirmClearOk">Yes, clear all</button>
     </div>
   </dialog>
-
-  <!-- Action picker (sequence mode) -->
-  <div id="actionPicker">
-    <div class="picker-label">Action at this stop</div>
-    <button data-action="move">move — pass through</button>
-    <button data-action="pickup">pickup — attach trolley</button>
-    <button data-action="release">release — detach trolley</button>
-    <button data-action="exchange">exchange — swap trolley</button>
-  </div>
 
   <!-- Home confirm dialog -->
   <dialog id="homeConfirmModal">
@@ -158,7 +152,7 @@
       window.location.href = 'index.html';
     });
     document.getElementById('homeSave').addEventListener('click', function () {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 's', bubbles: true }));
+      if (window.saveJSON) window.saveJSON();
       setTimeout(function () { window.location.href = 'index.html'; }, 300);
     });
   </script>

@@ -1,110 +1,63 @@
-// cpicker.js — Coordinate picker with radial menu
+// cpicker.js — Layout Picker for the Path / Stations / Groups / Call model.
+//
+//   PATH    — draw geometric corners + edges (straight/arc) the AGV travels.
+//   STATION — drop action sites and home slots; each auto-links to a corner.
+//   GROUP   — compose reusable multi-stop jobs (home → stops → home is implicit).
+//   CALL    — mark a station as an on-canvas call button bound to a group.
+//
+// Saves the schema consumed by normaliseLayout() (shared.js) + the player.
 
 const canvas = document.getElementById('canvas');
 const ctx    = canvas.getContext('2d');
 
-// ── Application state ─────────────────────────────────────────────────────
+const CORNER_HIT  = 14;
+const STATION_HIT = 16;
+const DOT_R       = 6;
 
-const TRACK_COLOR = '#3060d0';
+// ── State ───────────────────────────────────────────────────────────────────
 
 const state = {
-  nodes:         {},
-  agvs:          [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }],
-  activeAgvIdx:  0,
-  track:         { points: {}, segments: [] },
-  trackSel:      null,   // selected track-point ID (start of next segment)
-  trackArc:      false,  // next segment is arc
-  trackR:        100,    // arc radius for new segments
-  trackCW:       true,   // arc clockwise direction
-  trackPtN:      1,      // auto-name counter for TPs
-  trackSegN:     1,      // auto-name counter for segments
-  trackLastSeg:  null,   // ID of last created segment (for radius editing)
-  view:          { offsetX: 0, offsetY: 0, zoom: 1 },
-  mode:          'NODE',
-  bgImage:       null,
-  imgW: 0, imgH: 0,
+  path:     { nodes: {}, edges: [] },     // nodes: {id:{x,y}}  edges: [{id,from,to,type,radius,clockwise}]
+  stations: {},                           // id -> {x,y,role:'action'|'home',link}
+  agvs:     [{ id: 'AGV-01', color: AGV_COLORS[0] }],
+  groups:   {},                           // id -> {name, stops:[{station,action,dwell?}]}
+  activeGroup:  null,
+  callStations: [],                       // [{station,group}]
+  sim: { agvSpeed: 120, serviceTime: 3, requests: [],
+         autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } },
+
+  mode: 'PATH',                           // PATH | STATION | GROUP | CALL
+  view: { offsetX: 0, offsetY: 0, zoom: 1 },
+  bgImage: null, imgW: 0, imgH: 0,
   outputFilename: 'coords.json',
-  dispatch: {
-    enabled:      false,
-    homeSlots:    [],      // ordered seq_point node ids — one parking spot per AGV
-    lines:        [],      // { id, node, serviceAction, serviceTime }
-    requests:     [],      // { t, line, agv }
-    autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 },
-  },
-  mouseScreen: { sx: 0, sy: 0 },
-  mouseImg:    { ix: 0, iy: 0 },
-  isPanning:        false,
-  panStart:         { sx: 0, sy: 0 },
-  panViewStart:     { offsetX: 0, offsetY: 0 },
-  hoveredNode:      null,
-  actionPickerNode: null,
+  mouse: { sx: 0, sy: 0 },
+  isPanning: false, panStart: { sx: 0, sy: 0 }, panViewStart: { offsetX: 0, offsetY: 0 },
+
+  // PATH editing
+  pathSel: null, pathArc: false, pathR: 120, pathCW: true, pathPtN: 1, edgeN: 1,
+  // STATION editing
+  placeRole: 'action', stationN: 1, homeN: 1,
+  // counters
+  groupN: 0,
 };
 
-// Convenience accessor for the currently-edited AGV's sequence
-function activeSeq() { return state.agvs[state.activeAgvIdx].sequence; }
-function activeAgv()  { return state.agvs[state.activeAgvIdx]; }
+// ── Element refs ─────────────────────────────────────────────────────────────
 
-// ── Radial menu state ─────────────────────────────────────────────────────
-// Used in NODE mode (type_select | naming) and SEQUENCE mode (angle_select)
+const $ = id => document.getElementById(id);
+const modeBadge   = $('modeBadge');
+const pathBar     = $('pathBar'),    stationBar = $('stationBar');
+const groupBar    = $('groupBar'),   callBar    = $('callBar');
+const groupsPanel = $('groupsPanel'), groupsBody = $('groupsBody');
+const simBody     = $('simBody');
+const actionPicker = $('actionPicker'), groupPicker = $('groupPicker'), groupPickerBody = $('groupPickerBody');
+const hudCoords = $('hudCoords'), hudZoom = $('hudZoom'), hudCounts = $('hudCounts'), hudFile = $('hudFile');
+const startupModal = $('startupModal'), confirmClearModal = $('confirmClearModal');
+const filenameInput = $('filenameInput'), loadJsonInput = $('loadJsonInput'), loadImgInput = $('loadImgInput');
 
-const RADIAL_R  = 90;
-const RADIAL_RI = 26;
-const ANGLES    = [0, 45, 90, 135, 180, 225, 270, 315];
+// transient pick context (which station the action/group picker is acting on)
+let pickStation = null;
 
-const radial = {
-  active: false,
-  phase:  null,   // 'type_select' | 'naming' | 'angle_select'
-  cx: 0, cy: 0,
-  ix: 0, iy: 0,   // image coords (NODE mode placement)
-  nodeType: null, // for color
-  nodeName: '',   // shown in angle radial center
-};
-
-// Pending sequence entry — filled during SEQUENCE mode angle selection
-const seqEntry = {
-  pending: false,
-  nodeId:  null,
-  action:  null,
-  heading: 0,
-};
-
-// ── DOM references ────────────────────────────────────────────────────────
-
-const agvPanel          = document.getElementById('agvPanel');
-const startupModal      = document.getElementById('startupModal');
-const confirmClearModal = document.getElementById('confirmClearModal');
-const actionPicker      = document.getElementById('actionPicker');
-const seqPanel          = document.getElementById('seqPanel');
-const seqPanelTitle     = document.getElementById('seqPanelTitle');
-const seqList           = document.getElementById('seqList');
-const nodeListPanel     = document.getElementById('nodeListPanel');
-const nodeListTitle     = document.getElementById('nodeListTitle');
-const nodeListBody      = document.getElementById('nodeListBody');
-const modeBadge         = document.getElementById('modeBadge');
-const hudCoords         = document.getElementById('hudCoords');
-const hudZoom           = document.getElementById('hudZoom');
-const hudCounts         = document.getElementById('hudCounts');
-const hudFile           = document.getElementById('hudFile');
-const filenameInput     = document.getElementById('filenameInput');
-const loadJsonInput     = document.getElementById('loadJsonInput');
-const loadImgInput      = document.getElementById('loadImgInput');
-const nameInputBar      = document.getElementById('nameInputBar');
-const nameInput         = document.getElementById('nameInput');
-const detailsBar        = document.getElementById('detailsBar');
-const dwellInput        = document.getElementById('dwellInput');
-const labelInput        = document.getElementById('labelInput');
-const modeManual        = document.getElementById('modeManual');
-const detailsModeLabel  = document.getElementById('detailsModeLabel');
-const trackBar          = document.getElementById('trackBar');
-const trackStraightBtn  = document.getElementById('trackStraightBtn');
-const trackArcBtn       = document.getElementById('trackArcBtn');
-const trackArcControls  = document.getElementById('trackArcControls');
-const trackRadiusInput  = document.getElementById('trackRadiusInput');
-const trackCwBtn        = document.getElementById('trackCwBtn');
-const trackCcwBtn       = document.getElementById('trackCcwBtn');
-const trackInfoEl       = document.getElementById('trackInfo');
-
-// ── Canvas resize (DPR-aware) ─────────────────────────────────────────────
+// ── Canvas sizing ─────────────────────────────────────────────────────────────
 
 function resizeCanvas() {
   const dpr = window.devicePixelRatio || 1;
@@ -116,1122 +69,572 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// ── Image loading ─────────────────────────────────────────────────────────
-
-function loadImage(file) {
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.onload = () => {
-    state.bgImage = img;
-    state.imgW    = img.naturalWidth;
-    state.imgH    = img.naturalHeight;
-    const z = Math.min(window.innerWidth / state.imgW, (window.innerHeight - 26) / state.imgH) * 0.95;
-    state.view.zoom    = z;
-    state.view.offsetX = window.innerWidth  / 2 - state.imgW * z / 2;
-    state.view.offsetY = (window.innerHeight - 26) / 2 - state.imgH * z / 2;
-    URL.revokeObjectURL(url);
-  };
-  img.src = url;
-}
-
-// ── Startup modal ─────────────────────────────────────────────────────────
+// ── Startup / load / clear ─────────────────────────────────────────────────────
 
 startupModal.showModal();
+
+$('startBtn').addEventListener('click', () => {
+  const name = filenameInput.value.trim();
+  if (name) { state.outputFilename = name; }
+  startupModal.close();
+  refreshAll();
+  requestAnimationFrame(drawLoop);
+});
 
 loadJsonInput.addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = (ev) => {
-    try {
-      const data = JSON.parse(ev.target.result);
-      if (data.NODES) state.nodes = data.NODES;
-      if (data.TRACK) state.track = normaliseTrack(data.TRACK);
-      const loaded = normaliseAGVS(data);
-      if (loaded.length > 0) {
-        state.agvs = loaded.slice(0, 4);
-      } else {
-        state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
-      }
-      state.activeAgvIdx = 0;
-      // Sync TP counter past any loaded IDs
-      for (const id of Object.keys(state.track.points)) {
-        const n = parseInt(id.replace('TP-', ''), 10);
-        if (!isNaN(n) && n >= state.trackPtN) state.trackPtN = n + 1;
-      }
-      const nd = normaliseDispatch(data);
-      state.dispatch = nd
-        ? { enabled: true, homeSlots: nd.homeSlots, lines: nd.lines,
-            requests: nd.requests, autoGenerate: nd.autoGenerate }
-        : { enabled: false, homeSlots: [], lines: [], requests: [],
-            autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
-      updateAgvPanel();
-      updateSeqPanel();
-      updateNodeList();
-      updateTrackBar();
-      updateDispatchPanel();
-    } catch { alert('Invalid JSON.'); }
+    try { loadIntoState(JSON.parse(ev.target.result)); refreshAll(); }
+    catch (err) { console.warn(err); alert('Invalid JSON.'); }
   };
   reader.readAsText(file);
 });
 
-loadImgInput.addEventListener('change', (e) => {
-  if (e.target.files[0]) loadImage(e.target.files[0]);
-});
+loadImgInput.addEventListener('change', (e) => { if (e.target.files[0]) loadImage(e.target.files[0]); });
 
-document.getElementById('startBtn').addEventListener('click', () => {
-  const name = filenameInput.value.trim();
-  if (name) { state.outputFilename = name; hudFile.textContent = `→ ${name}`; }
-  startupModal.close();
-  updateAgvPanel();
-  updateSeqPanel();
-  updateNodeList();
-  updateTrackBar();
-  updateDispatchPanel();
-  requestAnimationFrame(drawLoop);
-});
+function loadImage(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    state.bgImage = img; state.imgW = img.naturalWidth; state.imgH = img.naturalHeight;
+    const z = Math.min(window.innerWidth / state.imgW, window.innerHeight / state.imgH) * 0.9;
+    state.view.zoom = z;
+    state.view.offsetX = window.innerWidth / 2 - state.imgW * z / 2;
+    state.view.offsetY = window.innerHeight / 2 - state.imgH * z / 2;
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+}
 
-// ── Clear ─────────────────────────────────────────────────────────────────
-
-document.getElementById('clearBtn').addEventListener('click', () => confirmClearModal.showModal());
-
-document.getElementById('confirmClearCancel').addEventListener('click', () => confirmClearModal.close());
-
-document.getElementById('confirmClearOk').addEventListener('click', () => {
+$('clearBtn').addEventListener('click', () => confirmClearModal.showModal());
+$('confirmClearCancel').addEventListener('click', () => confirmClearModal.close());
+$('confirmClearOk').addEventListener('click', () => {
   confirmClearModal.close();
-  state.nodes        = {};
-  state.agvs         = [{ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] }];
-  state.activeAgvIdx = 0;
-  state.track        = { points: {}, segments: [] };
-  state.trackSel     = null;
-  state.trackPtN     = 1;
-  state.trackSegN    = 1;
-  state.trackLastSeg = null;
+  state.path = { nodes: {}, edges: [] };
+  state.stations = {}; state.callStations = []; state.groups = {}; state.activeGroup = null;
+  state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
+  state.sim = { agvSpeed: 120, serviceTime: 3, requests: [],
+                autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
-  state.mode = 'NODE'; state.hoveredNode = null; state.actionPickerNode = null;
-  state.dispatch = { enabled: false, homeSlots: [], lines: [], requests: [],
-    autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
+  state.pathSel = null; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.groupN = 0;
+  state.mode = 'PATH';
   loadJsonInput.value = ''; loadImgInput.value = '';
   filenameInput.value = 'coords.json'; state.outputFilename = 'coords.json';
-  closeRadial(); hideActionPicker(); hideDetailsBar();
-  updateAgvPanel(); updateSeqPanel(); updateNodeList(); updateModeBadge();
-  updateTrackBar(); updateDispatchPanel();
   hudFile.textContent = '→ coords.json';
+  refreshAll();
   startupModal.showModal();
 });
 
-// ── WP auto-name ──────────────────────────────────────────────────────────
-
-function nextWpName() {
-  let n = 1;
-  while (state.nodes[`WP-${String(n).padStart(2, '0')}`]) n++;
-  return `WP-${String(n).padStart(2, '0')}`;
-}
-
-// ── Radial: node placement (NODE mode) ───────────────────────────────────
-
-function openRadial(sx, sy, ix, iy) {
-  radial.active = true;
-  radial.phase  = 'type_select';
-  radial.cx = sx; radial.cy = sy;
-  radial.ix = ix; radial.iy = iy;
-  radial.nodeType = null;
-  radial.nodeName = '';
-}
-
-function closeRadial() {
-  radial.active    = false;
-  radial.phase     = null;
-  seqEntry.pending = false;
-  seqEntry.nodeId  = null;
-  seqEntry.action  = null;
-  hideNameInput();
-}
-
-// Closes only the visual radial — keeps seqEntry intact so submitDetailsBar can still read it
-function closeRadialVisual() {
-  radial.active = false;
-  radial.phase  = null;
-  hideNameInput();
-}
-
-// ── Details bar (dwell / label / mode — shown after angle selection) ──────
-
-function showDetailsBar() {
-  dwellInput.value   = '';
-  labelInput.value   = '';
-  modeManual.checked = false;
-  // manual toggle only makes sense for trolley actions
-  detailsModeLabel.style.display =
-    ['pickup', 'release', 'exchange'].includes(seqEntry.action) ? 'flex' : 'none';
-  detailsBar.style.display = 'flex';
-  requestAnimationFrame(() => dwellInput.focus());
-}
-
-function hideDetailsBar() {
-  detailsBar.style.display = 'none';
-  seqEntry.pending = false;
-  seqEntry.nodeId  = null;
-  seqEntry.action  = null;
-  seqEntry.heading = 0;
-}
-
-function submitDetailsBar() {
-  const dwell = parseFloat(dwellInput.value);
-  const label = labelInput.value.trim();
-  const entry = {
-    node:    seqEntry.nodeId,
-    action:  seqEntry.action,
-    heading: seqEntry.heading,
+function loadIntoState(data) {
+  state.path = {
+    nodes: (data.PATH && data.PATH.nodes) || {},
+    edges: ((data.PATH && data.PATH.edges) || []).map(e => ({
+      id: e.id || nextEdgeId(), from: e.from, to: e.to,
+      type: e.type === 'arc' ? 'arc' : 'straight', radius: e.radius ?? 120, clockwise: e.clockwise !== false,
+    })),
   };
-  if (isFinite(dwell) && dwell >= 0) entry.dwell = dwell;
-  if (label) entry.label = label;
-  if (modeManual.checked) entry.mode = 'manual';
-  activeSeq().push(entry);
-  hideDetailsBar();
-  updateAgvPanel();
-  updateSeqPanel();
+  state.stations = {};
+  for (const [id, s] of Object.entries(data.STATIONS || {}))
+    state.stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action', link: s.link || null };
+  state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
+  if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
+  state.groups = {};
+  for (const [id, g] of Object.entries(data.GROUPS || {}))
+    state.groups[id] = { name: g.name || id, stops: (g.stops || []).map(st => {
+      const o = { station: st.station, action: st.action || 'move' };
+      if (st.dwell !== undefined) o.dwell = st.dwell;
+      return o;
+    }) };
+  state.callStations = (data.CALL_STATIONS || []).map(c => ({ station: c.station, group: c.group }));
+  const sim = data.SIM || {};
+  const ag = sim.autoGenerate || {};
+  state.sim = {
+    agvSpeed: sim.agvSpeed || 120, serviceTime: sim.serviceTime ?? 3,
+    requests: (sim.requests || []).map(r => ({ t: +r.t || 0, group: r.group, agv: r.agv || null })),
+    autoGenerate: { enabled: !!ag.enabled, meanInterval: ag.meanInterval || 6, seed: ag.seed ?? 1234 },
+  };
+  state.activeGroup = Object.keys(state.groups)[0] || null;
+  syncCounters();
 }
 
-[dwellInput, labelInput].forEach(input => {
-  input.addEventListener('keydown', (e) => {
-    e.stopPropagation();
-    if (e.key === 'Enter') submitDetailsBar();
-    if (e.key === 'Escape') hideDetailsBar();
-  });
-});
+function syncCounters() {
+  const num = (id, pre) => { const n = parseInt(String(id).replace(pre, ''), 10); return isNaN(n) ? 0 : n; };
+  state.pathPtN = Math.max(0, ...Object.keys(state.path.nodes).map(id => num(id, 'P-'))) + 1;
+  state.edgeN   = Math.max(0, ...state.path.edges.map(e => num(e.id, 'E-'))) + 1;
+  const stIds = Object.keys(state.stations);
+  state.stationN = Math.max(0, ...stIds.filter(i => i.startsWith('ST-')).map(i => num(i, 'ST-'))) + 1;
+  state.homeN    = Math.max(0, ...stIds.filter(i => i.startsWith('HS-')).map(i => num(i, 'HS-'))) + 1;
+  state.groupN   = Object.keys(state.groups).length;
+}
 
-function snapNodeToTrack(ix, iy) {
-  let bestId = null, bestDist = 20;
-  for (const [id, pt] of Object.entries(state.track.points)) {
-    const d = Math.hypot(ix - pt.x, iy - pt.y);
-    if (d < bestDist) { bestDist = d; bestId = id; }
+// ── Coordinate transforms / hit tests ──────────────────────────────────────────
+
+function toImg(sx, sy) { return screenToImg(sx, sy, state.view); }
+function nearestId(dict, ix, iy) {
+  let best = null, bd = Infinity;
+  for (const [id, p] of Object.entries(dict)) {
+    const d = Math.hypot(ix - p.x, iy - p.y);
+    if (d < bd) { bd = d; best = id; }
   }
-  return bestId;
+  return best;
 }
-
-function selectType(type) {
-  if (type === 'waypoint') {
-    const id   = nextWpName();
-    const ix   = Math.round(radial.ix), iy = Math.round(radial.iy);
-    const snap = snapNodeToTrack(ix, iy);
-    state.nodes[id] = snap
-      ? { x: state.track.points[snap].x, y: state.track.points[snap].y, type: 'waypoint', trackPoint: snap }
-      : { x: ix, y: iy, type: 'waypoint' };
-    closeRadial();
-    updateNodeList();
-    updateSeqPanel();
-  } else {
-    radial.nodeType = 'seq_point';
-    radial.phase    = 'naming';
-    showNameInput();
+function hitCorner(sx, sy) {
+  for (const [id, p] of Object.entries(state.path.nodes)) {
+    const s = imgToScreen(p.x, p.y, state.view);
+    if (Math.hypot(sx - s.sx, sy - s.sy) <= CORNER_HIT) return id;
   }
+  return null;
 }
-
-// ── Radial: sequence angle selection (SEQUENCE mode) ─────────────────────
-
-function openSeqAngleRadial(nodeId, action, cx, cy) {
-  seqEntry.pending = true;
-  seqEntry.nodeId  = nodeId;
-  seqEntry.action  = action;
-  radial.active    = true;
-  radial.phase     = 'angle_select';
-  radial.cx = cx; radial.cy = cy;
-  radial.nodeType  = state.nodes[nodeId]?.type || 'waypoint';
-  radial.nodeName  = nodeId;
-}
-
-function selectSeqAngle(sectorIdx) {
-  seqEntry.heading = sectorIdx * 45;
-  closeRadialVisual();   // keep seqEntry.nodeId/action intact for submitDetailsBar
-  showDetailsBar();
-}
-
-// ── Sector detection ──────────────────────────────────────────────────────
-
-function getTypeSector(mx, my) {
-  return (mx - radial.cx) < 0 ? 'seq_point' : 'waypoint';
-}
-
-function getAngleSector(mx, my) {
-  const dx = mx - radial.cx, dy = my - radial.cy;
-  if (Math.hypot(dx, dy) < RADIAL_RI) return null;
-  const deg = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
-  return Math.round(deg / 45) % 8;
-}
-
-// ── Name input bar ────────────────────────────────────────────────────────
-
-function showNameInput() {
-  nameInput.value = '';
-  nameInputBar.style.display = 'flex';
-  nameInputBar.style.left = `${radial.cx - 120}px`;
-  nameInputBar.style.top  = `${radial.cy - RADIAL_R - 72}px`;
-  requestAnimationFrame(() => nameInput.focus());
-}
-
-function hideNameInput() {
-  nameInputBar.style.display = 'none';
-  nameInputBar.classList.remove('error');
-  nameInput.value = '';
-}
-
-nameInput.addEventListener('keydown', (e) => {
-  e.stopPropagation();
-  if (e.key === 'Enter') {
-    const val = nameInput.value.trim();
-    if (!val) {
-      nameInputBar.classList.add('error');
-      setTimeout(() => nameInputBar.classList.remove('error'), 400);
-      return;
-    }
-    const ix   = Math.round(radial.ix), iy = Math.round(radial.iy);
-    const snap = snapNodeToTrack(ix, iy);
-    state.nodes[val] = snap
-      ? { x: state.track.points[snap].x, y: state.track.points[snap].y, type: 'seq_point', trackPoint: snap }
-      : { x: ix, y: iy, type: 'seq_point' };
-    hideNameInput();
-    closeRadial();
-    updateNodeList();
-    updateSeqPanel();
+function hitStation(sx, sy) {
+  for (const [id, p] of Object.entries(state.stations)) {
+    const s = imgToScreen(p.x, p.y, state.view);
+    if (Math.hypot(sx - s.sx, sy - s.sy) <= STATION_HIT) return id;
   }
-  if (e.key === 'Escape') closeRadial();
-});
-
-// ── Action picker (SEQUENCE mode) ─────────────────────────────────────────
-
-actionPicker.querySelectorAll('button[data-action]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const action = btn.dataset.action;
-    const nodeId = state.actionPickerNode;
-    const cx     = seqEntry._pickerCx ?? state.mouseScreen.sx;
-    const cy     = seqEntry._pickerCy ?? state.mouseScreen.sy;
-    hideActionPicker();
-    if (nodeId) openSeqAngleRadial(nodeId, action, cx, cy);
-  });
-});
-
-function showActionPicker(nodeId, clientX, clientY) {
-  state.actionPickerNode = nodeId;
-  // Store position for the angle radial that follows
-  seqEntry._pickerCx = clientX;
-  seqEntry._pickerCy = clientY;
-  const w = 200, h = 160;
-  actionPicker.style.left    = `${Math.min(clientX + 10, window.innerWidth  - w - 10)}px`;
-  actionPicker.style.top     = `${Math.min(clientY,       window.innerHeight - h - 10)}px`;
-  actionPicker.style.display = 'flex';
+  return null;
 }
 
-function hideActionPicker() {
-  state.actionPickerNode = null;
-  actionPicker.style.display = 'none';
+// ── Naming ──────────────────────────────────────────────────────────────────
+
+function nextCornerId() { let n = state.pathPtN; while (state.path.nodes[`P-${n}`]) n++; state.pathPtN = n + 1; return `P-${n}`; }
+function nextEdgeId()   { let n = state.edgeN;   state.edgeN = n + 1; return `E-${n}`; }
+function nextStationId(role) {
+  if (role === 'home') { let n = state.homeN; while (state.stations[`HS-${n}`]) n++; state.homeN = n + 1; return `HS-${n}`; }
+  let n = state.stationN; while (state.stations[`ST-${n}`]) n++; state.stationN = n + 1; return `ST-${n}`;
+}
+function nextGroupId() {
+  let i = state.groupN;
+  let id; do { id = 'G-' + String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : ''); i++; } while (state.groups[id]);
+  state.groupN = i;
+  return id;
 }
 
-document.addEventListener('mousedown', (e) => {
-  if (detailsBar.style.display === 'flex' && !detailsBar.contains(e.target)) {
-    hideDetailsBar();
-  }
-  if (actionPicker.style.display === 'flex' && !actionPicker.contains(e.target)) {
-    hideActionPicker();
-    seqEntry.pending = false;
-  }
-});
+// ── Mode switching ────────────────────────────────────────────────────────────
 
-// ── Keyboard ──────────────────────────────────────────────────────────────
+function setMode(m) {
+  state.mode = m;
+  state.pathSel = null;
+  hideActionPicker(); hideGroupPicker();
+  modeBadge.textContent = m + ' MODE';
+  modeBadge.className = { PATH: 'track-mode', STATION: 'node-mode', GROUP: 'seq-mode', CALL: 'node-mode' }[m] || 'node-mode';
+  pathBar.style.display    = m === 'PATH'    ? 'flex'  : 'none';
+  stationBar.style.display = m === 'STATION' ? 'flex'  : 'none';
+  groupBar.style.display   = m === 'GROUP'   ? 'flex'  : 'none';
+  callBar.style.display    = m === 'CALL'    ? 'flex'  : 'none';
+  groupsPanel.style.display = m === 'GROUP'  ? 'block' : 'none';
+  updateGroupBar();
+}
 
 window.addEventListener('keydown', (e) => {
-  if (startupModal.open || confirmClearModal.open) return;
-
-  if (e.key === 'Escape') {
-    if (state.mode === 'TRACK') { state.trackSel = null; return; }
-    if (radial.active) { closeRadial(); return; }
-  }
-
-  if (e.key === 't' || e.key === 'T') {
-    if (radial.active) closeRadial();
-    hideActionPicker(); hideDetailsBar();
-    state.mode = state.mode === 'TRACK' ? 'NODE' : 'TRACK';
-    state.trackSel = null;
-    updateModeBadge();
-    updateTrackBar();
-    return;
-  }
-
-  if (state.mode === 'TRACK') {
-    // A = toggle arc/straight
-    if (e.key === 'a' || e.key === 'A') {
-      state.trackArc = !state.trackArc;
-      updateTrackBar();
-    }
-    return; // absorb all other keys in track mode
-  }
-
-  if (e.key === 'e' || e.key === 'E') {
-    if (radial.active) closeRadial();
-    hideActionPicker();
-    state.mode = state.mode === 'NODE' ? 'SEQUENCE' : 'NODE';
-    updateModeBadge();
-  }
-
-  if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) saveJSON();
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === '1') setMode('PATH');
+  else if (e.key === '2') setMode('STATION');
+  else if (e.key === '3') setMode('GROUP');
+  else if (e.key === '4') setMode('CALL');
+  else if ((e.key === 'a' || e.key === 'A') && state.mode === 'PATH') { state.pathArc = !state.pathArc; updatePathBar(); }
+  else if (e.key === 's' || e.key === 'S') saveJSON();
+  else if (e.key === 'Escape') { state.pathSel = null; hideActionPicker(); hideGroupPicker(); }
 });
 
-// ── Mouse ─────────────────────────────────────────────────────────────────
-
-canvas.addEventListener('contextmenu', (e) => {
-  e.preventDefault();
-  if (radial.active) { closeRadial(); return; }
-  if (actionPicker.style.display === 'flex') { hideActionPicker(); return; }
-
-  if (state.mode === 'TRACK') {
-    if (state.trackSel) {
-      state.trackSel = null;
-    } else {
-      // Undo last track point and any segments connected to it
-      const ptIds = Object.keys(state.track.points);
-      if (!ptIds.length) return;
-      const lastId = ptIds[ptIds.length - 1];
-      delete state.track.points[lastId];
-      state.track.segments = state.track.segments.filter(s => s.from !== lastId && s.to !== lastId);
-      if (state.trackLastSeg && !state.track.segments.find(s => s.id === state.trackLastSeg))
-        state.trackLastSeg = null;
-      state.trackPtN = Math.max(1, state.trackPtN - 1);
-      updateTrackBar();
-    }
-    return;
-  }
-
-  if (state.mode === 'NODE') {
-    const keys = Object.keys(state.nodes);
-    if (keys.length) { delete state.nodes[keys[keys.length - 1]]; updateSeqPanel(); updateNodeList(); }
-  } else {
-    if (activeSeq().length) { activeSeq().pop(); updateAgvPanel(); updateSeqPanel(); }
-  }
-});
+// ── Mouse: pan / zoom / click ──────────────────────────────────────────────────
 
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 1) {
     e.preventDefault();
-    state.isPanning    = true;
-    state.panStart     = { sx: e.clientX, sy: e.clientY };
+    state.isPanning = true;
+    state.panStart = { sx: e.clientX, sy: e.clientY };
     state.panViewStart = { offsetX: state.view.offsetX, offsetY: state.view.offsetY };
-    return;
-  }
-  if (e.button !== 0) return;
-  if (startupModal.open || confirmClearModal.open) return;
-  if (actionPicker.style.display === 'flex') { hideActionPicker(); return; }
-
-  const mx = e.clientX, my = e.clientY;
-
-  if (state.mode === 'TRACK') {
-    const hitTP = findTrackPtAt(mx, my);
-    if (hitTP) {
-      if (!state.trackSel) {
-        state.trackSel = hitTP;
-      } else if (state.trackSel === hitTP) {
-        state.trackSel = null;
-      } else {
-        connectTrackPoints(state.trackSel, hitTP);
-        state.trackSel = hitTP; // chain: new start
-      }
-    } else {
-      // Place new track point
-      const img  = screenToImg(mx, my, state.view);
-      const newId = `TP-${String(state.trackPtN).padStart(2, '0')}`;
-      state.trackPtN++;
-      state.track.points[newId] = { x: Math.round(img.ix), y: Math.round(img.iy) };
-      if (state.trackSel) connectTrackPoints(state.trackSel, newId);
-      state.trackSel = newId;
-      updateTrackBar();
-    }
-    return;
-  }
-
-  if (state.mode === 'NODE') {
-    if (radial.active) {
-      if (radial.phase === 'type_select') {
-        const dist = Math.hypot(mx - radial.cx, my - radial.cy);
-        if (dist < RADIAL_RI) { closeRadial(); return; }
-        if (dist > RADIAL_R) {
-          const img = screenToImg(mx, my, state.view);
-          openRadial(mx, my, img.ix, img.iy);
-          return;
-        }
-        selectType(getTypeSector(mx, my));
-      }
-      // 'naming' phase is handled by nameInput keydown
-    } else {
-      const img = screenToImg(mx, my, state.view);
-      openRadial(mx, my, img.ix, img.iy);
-    }
-
-  } else {
-    // SEQUENCE mode
-    if (radial.active && radial.phase === 'angle_select') {
-      const dist = Math.hypot(mx - radial.cx, my - radial.cy);
-      if (dist > RADIAL_R + 20) { closeRadial(); return; }
-      const sector = getAngleSector(mx, my);
-      if (sector === null) { closeRadial(); return; }
-      selectSeqAngle(sector);
-      return;
-    }
-
-    if (!radial.active) {
-      const hit = findNodeAt(state.mouseScreen.sx, state.mouseScreen.sy, state.nodes, state.view);
-      if (hit) {
-        if (state.nodes[hit].type === 'waypoint') {
-          openSeqAngleRadial(hit, 'move', mx, my);
-        } else {
-          showActionPicker(hit, mx, my);
-          e.stopPropagation();
-        }
-      }
-    }
   }
 });
-
-canvas.addEventListener('mouseup', (e) => {
-  if (e.button === 1) state.isPanning = false;
-});
-
+canvas.addEventListener('mouseup', (e) => { if (e.button === 1) state.isPanning = false; });
 canvas.addEventListener('mousemove', (e) => {
-  state.mouseScreen.sx = e.clientX;
-  state.mouseScreen.sy = e.clientY;
-  const img = screenToImg(e.clientX, e.clientY, state.view);
-  state.mouseImg.ix = Math.max(0, Math.min(state.imgW || 9999, img.ix));
-  state.mouseImg.iy = Math.max(0, Math.min(state.imgH || 9999, img.iy));
-
+  state.mouse.sx = e.clientX; state.mouse.sy = e.clientY;
   if (state.isPanning) {
     state.view.offsetX = state.panViewStart.offsetX + (e.clientX - state.panStart.sx);
     state.view.offsetY = state.panViewStart.offsetY + (e.clientY - state.panStart.sy);
   }
-
-  if (state.mode === 'TRACK') {
-    const hitTP = findTrackPtAt(e.clientX, e.clientY);
-    canvas.style.cursor = hitTP ? 'pointer' : 'crosshair';
-  } else if (state.mode === 'SEQUENCE' && !radial.active) {
-    state.hoveredNode = findNodeAt(e.clientX, e.clientY, state.nodes, state.view);
-    canvas.style.cursor = state.hoveredNode ? 'pointer' : 'default';
-  } else {
-    canvas.style.cursor = (state.mode === 'NODE' && !radial.active) ? 'crosshair' : 'default';
-  }
-
-  hudCoords.textContent = `(${Math.round(state.mouseImg.ix)}, ${Math.round(state.mouseImg.iy)})`;
-  hudZoom.textContent   = `zoom: ${state.view.zoom.toFixed(2)}×`;
-  hudCounts.textContent = `agvs: ${state.agvs.length} | nodes: ${Object.keys(state.nodes).length} | seq: ${activeSeq().length}`;
 });
-
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  const factor  = e.deltaY < 0 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP;
-  const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.view.zoom * factor));
-  const { ix, iy } = screenToImg(state.mouseScreen.sx, state.mouseScreen.sy, state.view);
-  state.view.zoom    = newZoom;
-  state.view.offsetX = state.mouseScreen.sx - ix * newZoom;
-  state.view.offsetY = state.mouseScreen.sy - iy * newZoom;
+  const factor = e.deltaY < 0 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP;
+  const z = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, state.view.zoom * factor));
+  const { ix, iy } = toImg(e.clientX, e.clientY);
+  state.view.zoom = z;
+  state.view.offsetX = e.clientX - ix * z;
+  state.view.offsetY = e.clientY - iy * z;
 }, { passive: false });
 
-// ── Radial draw: type select ──────────────────────────────────────────────
-
-function drawTypeSelectRadial() {
-  const { cx, cy } = radial;
-  const R = RADIAL_R, Ri = RADIAL_RI;
-  const hoverLeft = (state.mouseScreen.sx - cx) < 0;
-
-  ctx.save();
-
-  // Left — seq_point
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.arc(cx, cy, R, Math.PI / 2, -Math.PI / 2, false);
-  ctx.closePath();
-  ctx.fillStyle   = hoverLeft ? 'rgba(80,220,120,0.82)' : 'rgba(80,220,120,0.28)';
-  ctx.fill();
-  ctx.strokeStyle = hoverLeft ? '#1a8030' : 'rgba(80,200,100,0.4)';
-  ctx.lineWidth   = 1.5;
-  ctx.stroke();
-
-  // Right — waypoint
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.arc(cx, cy, R, -Math.PI / 2, Math.PI / 2, false);
-  ctx.closePath();
-  ctx.fillStyle   = !hoverLeft ? 'rgba(255,200,50,0.82)' : 'rgba(255,200,50,0.28)';
-  ctx.fill();
-  ctx.strokeStyle = !hoverLeft ? '#b07800' : 'rgba(220,170,40,0.4)';
-  ctx.lineWidth   = 1.5;
-  ctx.stroke();
-
-  // Divider
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R);
-  ctx.strokeStyle = 'rgba(100,100,120,0.3)'; ctx.lineWidth = 1; ctx.stroke();
-
-  // Inner donut
-  ctx.beginPath();
-  ctx.arc(cx, cy, Ri, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(248,248,252,0.96)'; ctx.fill();
-  ctx.strokeStyle = '#c0c0cc'; ctx.lineWidth = 1; ctx.stroke();
-
-  // Labels
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = hoverLeft ? '#1a5028' : '#1a8030';
-  ctx.font = 'bold 12px monospace'; ctx.fillText('seq',   cx - R * 0.6, cy - 7);
-  ctx.font = '10px monospace';      ctx.fillText('point', cx - R * 0.6, cy + 7);
-  ctx.fillStyle = !hoverLeft ? '#805000' : '#b07800';
-  ctx.font = 'bold 12px monospace'; ctx.fillText('way',   cx + R * 0.6, cy - 7);
-  ctx.font = '10px monospace';      ctx.fillText('point', cx + R * 0.6, cy + 7);
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
-  ctx.fillStyle = '#606070'; ctx.fill();
-  ctx.restore();
-}
-
-// ── Radial draw: angle select ─────────────────────────────────────────────
-
-function drawAngleSelectRadial() {
-  const { cx, cy } = radial;
-  const R = RADIAL_R, Ri = RADIAL_RI;
-  const hoverSector = getAngleSector(state.mouseScreen.sx, state.mouseScreen.sy);
-  const isSeq  = radial.nodeType === 'seq_point';
-  const baseC  = isSeq ? 'rgba(80,220,120,0.22)'  : 'rgba(255,200,50,0.22)';
-  const hovC   = isSeq ? 'rgba(80,220,120,0.82)'  : 'rgba(255,200,50,0.82)';
-  const hovStr = isSeq ? '#1a8030'                 : '#b07800';
-
-  ctx.save();
-  for (let i = 0; i < 8; i++) {
-    const startAngle = (i * 45 - 22.5) * Math.PI / 180;
-    const endAngle   = (i * 45 + 22.5) * Math.PI / 180;
-    const isHover    = hoverSector === i;
-
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.arc(cx, cy, R, startAngle, endAngle);
-    ctx.closePath();
-    ctx.fillStyle   = isHover ? hovC  : baseC;
-    ctx.fill();
-    ctx.strokeStyle = isHover ? hovStr : 'rgba(150,150,160,0.25)';
-    ctx.lineWidth   = 1.5; ctx.stroke();
-
-    const midRad = i * 45 * Math.PI / 180;
-    const lx = cx + R * 0.65 * Math.cos(midRad);
-    const ly = cy + R * 0.65 * Math.sin(midRad);
-    ctx.fillStyle    = isHover ? '#1a1a2a' : '#505060';
-    ctx.font         = `${isHover ? 'bold ' : ''}11px monospace`;
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${ANGLES[i]}°`, lx, ly);
-  }
-
-  // Inner donut
-  ctx.beginPath();
-  ctx.arc(cx, cy, Ri, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(248,248,252,0.96)'; ctx.fill();
-  ctx.strokeStyle = '#c0c0cc'; ctx.lineWidth = 1; ctx.stroke();
-
-  // Node name in center
-  const label = radial.nodeName.length > 7
-    ? radial.nodeName.slice(0, 6) + '…' : radial.nodeName;
-  ctx.fillStyle = '#1a1a2a'; ctx.font = 'bold 9px monospace';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(label, cx, cy);
-  ctx.restore();
-}
-
-// ── Panel updates ─────────────────────────────────────────────────────────
-
-function updateSeqPanel() {
-  const agv = activeAgv();
-  const seq = activeSeq();
-  seqPanel.style.display    = seq.length > 0 ? 'block' : 'none';
-  seqPanel.style.borderColor = agv.color;
-  seqPanelTitle.style.color  = agv.color;
-  seqPanelTitle.textContent  = `${agv.id} (${seq.length})`;
-  seqList.innerHTML = '';
-  seq.forEach(({ node, action, heading, dwell, label, mode }, i) => {
-    const row = document.createElement('div');
-    row.className = 'seq-entry';
-    let extras = '';
-    if (dwell !== undefined || label || mode === 'manual') {
-      extras = '<div class="seq-extras">';
-      if (dwell !== undefined) extras += `<span class="seq-dwell">${dwell}s</span>`;
-      if (label) extras += `<span class="seq-lbl" title="${label}">${label}</span>`;
-      if (mode === 'manual') extras += `<span class="seq-manual">MAN</span>`;
-      extras += '</div>';
-    }
-    row.innerHTML =
-      `<div class="seq-entry-row">` +
-      `<span class="seq-idx">${i}</span>` +
-      `<span class="seq-node">${node}</span>` +
-      `<span class="action-badge badge-${action}">${action}</span>` +
-      `<span class="seq-heading">${heading ?? 0}°</span>` +
-      `</div>` +
-      extras;
-    seqList.appendChild(row);
-  });
-}
-
-function updateAgvPanel() {
-  agvPanel.innerHTML = '';
-  const title = document.createElement('div');
-  title.className   = 'panel-title';
-  title.textContent = `AGVs (${state.agvs.length})`;
-  agvPanel.appendChild(title);
-
-  state.agvs.forEach((agv, i) => {
-    const row = document.createElement('div');
-    row.className = 'agv-entry';
-    row.style.borderLeftColor = i === state.activeAgvIdx ? agv.color : 'transparent';
-    row.innerHTML =
-      `<span class="agv-swatch" style="background:${agv.color}"></span>` +
-      `<span class="agv-id">${agv.id}</span>` +
-      `<span class="agv-seq-count">${agv.sequence.length}</span>`;
-
-    if (state.agvs.length > 1) {
-      const removeBtn = document.createElement('button');
-      removeBtn.className   = 'agv-remove-btn';
-      removeBtn.textContent = '×';
-      removeBtn.title       = 'Remove AGV';
-      removeBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        state.agvs.splice(i, 1);
-        if (state.activeAgvIdx >= state.agvs.length) state.activeAgvIdx = state.agvs.length - 1;
-        closeRadial(); hideActionPicker(); hideDetailsBar();
-        updateAgvPanel(); updateSeqPanel();
-      });
-      row.appendChild(removeBtn);
-    }
-
-    row.addEventListener('click', () => {
-      state.activeAgvIdx = i;
-      closeRadial();
-      hideActionPicker();
-      hideDetailsBar();
-      updateAgvPanel();
-      updateSeqPanel();
-    });
-    agvPanel.appendChild(row);
-  });
-
-  if (state.agvs.length < 4) {
-    const addBtn = document.createElement('button');
-    addBtn.className   = 'agv-add-btn';
-    addBtn.textContent = '+ New AGV';
-    addBtn.addEventListener('click', () => {
-      const idx   = state.agvs.length;
-      const color = AGV_COLORS[idx % AGV_COLORS.length];
-      state.agvs.push({ id: `AGV-0${idx + 1}`, color, sequence: [] });
-      state.activeAgvIdx = idx;
-      updateAgvPanel();
-      updateSeqPanel();
-    });
-    agvPanel.appendChild(addBtn);
-  }
-
-  agvPanel.style.display = 'block';
-}
-
-function updateNodeList() {
-  const keys = Object.keys(state.nodes);
-  nodeListPanel.style.display = keys.length > 0 ? 'block' : 'none';
-  nodeListTitle.textContent   = `NODES (${keys.length})`;
-  nodeListBody.innerHTML      = '';
-  keys.forEach(id => {
-    const isSeq = state.nodes[id].type === 'seq_point';
-    const row   = document.createElement('div');
-    row.className = 'node-entry';
-    row.innerHTML =
-      `<span class="node-entry-name">${id}</span>` +
-      `<span class="${isSeq ? 'node-type-seq' : 'node-type-wp'}">${isSeq ? 'seq' : 'wp'}</span>`;
-    nodeListBody.appendChild(row);
-  });
-}
-
-function updateModeBadge() {
-  const labels  = { NODE: 'NODE MODE', SEQUENCE: 'SEQUENCE MODE', TRACK: 'TRACK MODE' };
-  const classes = { NODE: 'node-mode', SEQUENCE: 'seq-mode',      TRACK: 'track-mode' };
-  modeBadge.textContent = labels[state.mode]  || 'NODE MODE';
-  modeBadge.className   = classes[state.mode] || 'node-mode';
-}
-
-// ── Dispatch authoring ─────────────────────────────────────────────────────
-
-function nodeDispatchRole(id) {
-  if (state.dispatch.homeSlots.includes(id))           return 'home';
-  if (state.dispatch.lines.some(l => l.node === id))   return 'line';
-  return 'none';
-}
-
-function nextLineId() {
-  const used = new Set(state.dispatch.lines.map(l => l.id));
-  for (let i = 0; i < 26; i++) {
-    const id = 'LINE-' + String.fromCharCode(65 + i);
-    if (!used.has(id)) return id;
-  }
-  return 'LINE-' + (state.dispatch.lines.length + 1);
-}
-
-function setNodeDispatchRole(id, role) {
-  state.dispatch.homeSlots = state.dispatch.homeSlots.filter(x => x !== id);
-  state.dispatch.lines     = state.dispatch.lines.filter(l => l.node !== id);
-  if (role === 'home') {
-    state.dispatch.homeSlots.push(id);
-  } else if (role === 'line') {
-    state.dispatch.lines.push({ id: nextLineId(), node: id, serviceAction: 'exchange', serviceTime: 3 });
-  }
-  updateDispatchPanel();
-}
-
-function parseRequestsText(txt) {
-  return txt.split('\n').map(s => s.trim()).filter(Boolean).map(s => {
-    const p = s.split(/[\s,]+/);
-    return { t: parseFloat(p[0]) || 0, line: p[1], agv: p[2] || null };
-  }).filter(r => r.line);
-}
-
-function updateDispatchPanel() {
-  const panel = document.getElementById('dispatchPanel');
-  const body  = document.getElementById('dispatchBody');
-  if (!panel || !body) return;
-  panel.style.display = 'block';
-  body.innerHTML = '';
-
-  // Enable toggle
-  const head = document.createElement('label');
-  head.className = 'dispatch-enable';
-  const en = document.createElement('input');
-  en.type = 'checkbox';
-  en.checked = state.dispatch.enabled;
-  en.addEventListener('change', () => { state.dispatch.enabled = en.checked; updateDispatchPanel(); });
-  head.appendChild(en);
-  head.appendChild(document.createTextNode(' Enable dispatch mode'));
-  body.appendChild(head);
-  if (!state.dispatch.enabled) return;
-
-  // Per seq_point role assignment
-  const seqIds = Object.keys(state.nodes).filter(id => state.nodes[id].type === 'seq_point');
-  seqIds.forEach(id => {
-    const row = document.createElement('div');
-    row.className = 'dispatch-row';
-    const role = nodeDispatchRole(id);
-    const slotIdx = state.dispatch.homeSlots.indexOf(id);
-    const tag = role === 'home' ? ` [slot ${slotIdx + 1}]`
-              : role === 'line' ? ` [${state.dispatch.lines.find(l => l.node === id).id}]` : '';
-
-    const name = document.createElement('span');
-    name.className = 'dispatch-name';
-    name.textContent = id + tag;
-    row.appendChild(name);
-
-    const sel = document.createElement('select');
-    ['none', 'home', 'line'].forEach(r => {
-      const o = document.createElement('option');
-      o.value = r; o.textContent = r; if (r === role) o.selected = true;
-      sel.appendChild(o);
-    });
-    sel.addEventListener('change', () => setNodeDispatchRole(id, sel.value));
-    row.appendChild(sel);
-
-    if (role === 'line') {
-      const line = state.dispatch.lines.find(l => l.node === id);
-      const st = document.createElement('input');
-      st.type = 'number'; st.min = '0'; st.step = '0.5'; st.value = line.serviceTime;
-      st.title = 'service time (s)'; st.className = 'dispatch-st';
-      st.addEventListener('change', () => { line.serviceTime = parseFloat(st.value) || 0; });
-      st.addEventListener('keydown', e => e.stopPropagation());
-      row.appendChild(st);
-    }
-    body.appendChild(row);
-  });
-
-  // Requests timeline
-  const reqLbl = document.createElement('div');
-  reqLbl.className = 'dispatch-sub';
-  reqLbl.textContent = 'Requests  (t  LINE-X  [AGV-0N])';
-  body.appendChild(reqLbl);
-  const ta = document.createElement('textarea');
-  ta.className = 'dispatch-ta';
-  ta.rows = 4;
-  ta.value = state.dispatch.requests.map(r => `${r.t} ${r.line}${r.agv ? ' ' + r.agv : ''}`).join('\n');
-  ta.placeholder = '1 LINE-A\n2 LINE-B AGV-01';
-  ta.addEventListener('change', () => { state.dispatch.requests = parseRequestsText(ta.value); });
-  ta.addEventListener('keydown', e => e.stopPropagation());
-  body.appendChild(ta);
-
-  // Auto-generate
-  const ag = state.dispatch.autoGenerate;
-  const agRow = document.createElement('label');
-  agRow.className = 'dispatch-enable';
-  const agc = document.createElement('input');
-  agc.type = 'checkbox'; agc.checked = ag.enabled;
-  agc.addEventListener('change', () => { ag.enabled = agc.checked; });
-  agRow.appendChild(agc);
-  agRow.appendChild(document.createTextNode(' Auto-generate (seed/interval)'));
-  body.appendChild(agRow);
-
-  const agParams = document.createElement('div');
-  agParams.className = 'dispatch-row';
-  const iv = document.createElement('input');
-  iv.type = 'number'; iv.min = '1'; iv.step = '1'; iv.value = ag.meanInterval; iv.title = 'mean interval (s)'; iv.className = 'dispatch-st';
-  iv.addEventListener('change', () => { ag.meanInterval = parseFloat(iv.value) || 6; });
-  iv.addEventListener('keydown', e => e.stopPropagation());
-  const sd = document.createElement('input');
-  sd.type = 'number'; sd.step = '1'; sd.value = ag.seed; sd.title = 'seed'; sd.className = 'dispatch-st';
-  sd.addEventListener('change', () => { ag.seed = parseInt(sd.value, 10) || 0; });
-  sd.addEventListener('keydown', e => e.stopPropagation());
-  agParams.appendChild(iv);
-  agParams.appendChild(sd);
-  body.appendChild(agParams);
-}
-
-// ── Track helpers ─────────────────────────────────────────────────────────
-
-function findTrackPtAt(sx, sy) {
-  let bestId = null, bestDist = 14;
-  for (const [id, pt] of Object.entries(state.track.points)) {
-    const { sx: tx, sy: ty } = imgToScreen(pt.x, pt.y, state.view);
-    const d = Math.hypot(sx - tx, sy - ty);
-    if (d < bestDist) { bestDist = d; bestId = id; }
-  }
-  return bestId;
-}
-
-function connectTrackPoints(fromId, toId) {
-  const dup = state.track.segments.some(
-    s => (s.from === fromId && s.to === toId) || (s.from === toId && s.to === fromId)
-  );
-  if (dup) return;
-  const segId = `S-${String(state.trackSegN).padStart(2, '0')}`;
-  state.trackSegN++;
-  const seg = { id: segId, from: fromId, to: toId, type: state.trackArc ? 'arc' : 'straight' };
-  if (state.trackArc) { seg.radius = state.trackR; seg.clockwise = state.trackCW; }
-  state.track.segments.push(seg);
-  state.trackLastSeg = segId;
-  updateTrackBar();
-}
-
-function updateTrackBar() {
-  trackBar.style.display = state.mode === 'TRACK' ? 'flex' : 'none';
-  trackStraightBtn.classList.toggle('active', !state.trackArc);
-  trackArcBtn.classList.toggle('active',  state.trackArc);
-  trackArcControls.style.display = state.trackArc ? 'flex' : 'none';
-  if (state.trackArc) {
-    trackRadiusInput.value = state.trackR;
-    trackCwBtn.classList.toggle('active',  state.trackCW);
-    trackCcwBtn.classList.toggle('active', !state.trackCW);
-  }
-  const nPts  = Object.keys(state.track.points).length;
-  const nSegs = state.track.segments.length;
-  trackInfoEl.textContent = `${nPts} pts · ${nSegs} segs`;
-}
-
-// Wire up trackBar buttons
-trackStraightBtn.addEventListener('click', () => { state.trackArc = false; updateTrackBar(); });
-trackArcBtn.addEventListener('click',      () => { state.trackArc = true;  updateTrackBar(); });
-trackCwBtn.addEventListener('click',  () => { state.trackCW = true;  updateLastArcSeg(); updateTrackBar(); });
-trackCcwBtn.addEventListener('click', () => { state.trackCW = false; updateLastArcSeg(); updateTrackBar(); });
-
-trackRadiusInput.addEventListener('change', () => {
-  const v = parseFloat(trackRadiusInput.value);
-  if (!isFinite(v) || v < 10) return;
-  state.trackR = v;
-  updateLastArcSeg();
+canvas.addEventListener('click', (e) => {
+  if (e.target !== canvas) return;
+  const sx = e.clientX, sy = e.clientY;
+  if (state.mode === 'PATH')    onClickPath(sx, sy);
+  else if (state.mode === 'STATION') onClickStation(sx, sy);
+  else if (state.mode === 'GROUP')   onClickGroup(sx, sy);
+  else if (state.mode === 'CALL')    onClickCall(sx, sy);
 });
-trackRadiusInput.addEventListener('keydown', (e) => e.stopPropagation());
 
-function updateLastArcSeg() {
-  if (!state.trackLastSeg) return;
-  const seg = state.track.segments.find(s => s.id === state.trackLastSeg);
-  if (seg && seg.type === 'arc') {
-    seg.radius    = state.trackR;
-    seg.clockwise = state.trackCW;
+canvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (state.mode === 'PATH')    undoPath();
+  else if (state.mode === 'STATION') undoStation();
+  else if (state.mode === 'GROUP')   undoGroupStop();
+  else if (state.mode === 'CALL')    removeCallAt(e.clientX, e.clientY);
+});
+
+// ── PATH mode ──────────────────────────────────────────────────────────────────
+
+function onClickPath(sx, sy) {
+  const hit = hitCorner(sx, sy);
+  if (hit) {
+    if (state.pathSel && state.pathSel !== hit) { connectCorners(state.pathSel, hit); state.pathSel = hit; }
+    else state.pathSel = hit;
+    return;
+  }
+  const { ix, iy } = toImg(sx, sy);
+  const id = nextCornerId();
+  state.path.nodes[id] = { x: Math.round(ix), y: Math.round(iy) };
+  if (state.pathSel) connectCorners(state.pathSel, id);
+  state.pathSel = id;
+  updatePathBar();
+}
+function connectCorners(a, b) {
+  if (a === b) return;
+  if (state.path.edges.some(s => (s.from === a && s.to === b) || (s.from === b && s.to === a))) return;
+  const edge = { id: nextEdgeId(), from: a, to: b, type: state.pathArc ? 'arc' : 'straight' };
+  if (state.pathArc) { edge.radius = state.pathR; edge.clockwise = state.pathCW; }
+  state.path.edges.push(edge);
+  updatePathBar();
+}
+function undoPath() {
+  if (state.pathSel) { state.pathSel = null; return; }
+  if (state.path.edges.length) { state.path.edges.pop(); updatePathBar(); return; }
+  const ids = Object.keys(state.path.nodes);
+  if (ids.length) { delete state.path.nodes[ids[ids.length - 1]]; updatePathBar(); }
+}
+function updatePathBar() {
+  $('pathStraightBtn').classList.toggle('active', !state.pathArc);
+  $('pathArcBtn').classList.toggle('active', state.pathArc);
+  $('pathArcControls').style.display = state.pathArc ? 'flex' : 'none';
+  $('pathRadiusInput').value = state.pathR;
+  $('pathCwBtn').classList.toggle('active', state.pathCW);
+  $('pathCcwBtn').classList.toggle('active', !state.pathCW);
+  $('pathInfo').textContent = `${Object.keys(state.path.nodes).length} corners · ${state.path.edges.length} edges`;
+  updateHud();
+}
+$('pathStraightBtn').addEventListener('click', () => { state.pathArc = false; updatePathBar(); });
+$('pathArcBtn').addEventListener('click', () => { state.pathArc = true; updatePathBar(); });
+$('pathCwBtn').addEventListener('click', () => { state.pathCW = true; updateLastArc(); updatePathBar(); });
+$('pathCcwBtn').addEventListener('click', () => { state.pathCW = false; updateLastArc(); updatePathBar(); });
+$('pathRadiusInput').addEventListener('keydown', e => e.stopPropagation());
+$('pathRadiusInput').addEventListener('change', () => {
+  const v = parseFloat($('pathRadiusInput').value); if (!isFinite(v) || v < 10) return;
+  state.pathR = v; updateLastArc();
+});
+function updateLastArc() {
+  for (let i = state.path.edges.length - 1; i >= 0; i--) {
+    if (state.path.edges[i].type === 'arc') { state.path.edges[i].radius = state.pathR; state.path.edges[i].clockwise = state.pathCW; return; }
   }
 }
 
-// ── Save JSON ─────────────────────────────────────────────────────────────
+// ── STATION mode ───────────────────────────────────────────────────────────────
+
+$('stActionBtn').addEventListener('click', () => { state.placeRole = 'action'; updateStationBar(); });
+$('stHomeBtn').addEventListener('click', () => { state.placeRole = 'home'; updateStationBar(); });
+function updateStationBar() {
+  $('stActionBtn').classList.toggle('active', state.placeRole === 'action');
+  $('stHomeBtn').classList.toggle('active', state.placeRole === 'home');
+}
+function onClickStation(sx, sy) {
+  const { ix, iy } = toImg(sx, sy);
+  const id = nextStationId(state.placeRole);
+  const link = nearestId(state.path.nodes, ix, iy);   // nearest corner (may be null if no path yet)
+  state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: state.placeRole, link };
+  if (!link) console.warn(`Station ${id} has no path corner to link to — draw the path first.`);
+  updateHud();
+}
+function undoStation() {
+  const ids = Object.keys(state.stations);
+  if (!ids.length) return;
+  const last = ids[ids.length - 1];
+  delete state.stations[last];
+  // cascade: drop references
+  state.callStations = state.callStations.filter(c => c.station !== last);
+  for (const g of Object.values(state.groups)) g.stops = g.stops.filter(s => s.station !== last);
+  updateHud(); updateGroupsPanel();
+}
+
+// ── GROUP mode ─────────────────────────────────────────────────────────────────
+
+$('newGroupBtn').addEventListener('click', () => {
+  const id = nextGroupId();
+  state.groups[id] = { name: id, stops: [] };
+  state.activeGroup = id;
+  updateGroupsPanel(); updateGroupBar();
+});
+function onClickGroup(sx, sy) {
+  const st = hitStation(sx, sy);
+  if (!st) return;
+  if (!state.activeGroup) {
+    const id = nextGroupId(); state.groups[id] = { name: id, stops: [] }; state.activeGroup = id; updateGroupsPanel();
+  }
+  pickStation = st;
+  showActionPicker(sx, sy);
+}
+function undoGroupStop() {
+  const g = state.groups[state.activeGroup];
+  if (g && g.stops.length) { g.stops.pop(); updateGroupsPanel(); }
+}
+function updateGroupBar() {
+  $('groupBarLabel').textContent = state.activeGroup
+    ? `Active group: ${state.activeGroup}  (${state.groups[state.activeGroup].stops.length} stops)`
+    : 'No active group — click "+ New group"';
+}
+function updateGroupsPanel() {
+  groupsBody.innerHTML = '';
+  for (const [id, g] of Object.entries(state.groups)) {
+    const row = document.createElement('div');
+    row.className = 'agv-entry' + (id === state.activeGroup ? ' active' : '');
+    row.innerHTML = `<span style="flex:1;">${id}</span><span style="color:#888;">${g.stops.length}</span>`;
+    const del = document.createElement('span');
+    del.textContent = ' ✕'; del.style.cssText = 'cursor:pointer;color:#c33;margin-left:6px;';
+    del.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      delete state.groups[id];
+      state.callStations = state.callStations.filter(c => c.group !== id);
+      if (state.activeGroup === id) state.activeGroup = Object.keys(state.groups)[0] || null;
+      updateGroupsPanel(); updateGroupBar();
+    });
+    row.appendChild(del);
+    row.addEventListener('click', () => { state.activeGroup = id; updateGroupsPanel(); updateGroupBar(); });
+    groupsBody.appendChild(row);
+
+    if (id === state.activeGroup) {
+      g.stops.forEach((s, i) => {
+        const sr = document.createElement('div');
+        sr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;';
+        sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${s.station}</span><span style="color:#1a6828;">${s.action}</span>`;
+        groupsBody.appendChild(sr);
+      });
+    }
+  }
+  updateGroupBar(); updateHud();
+}
+
+// ── CALL mode ──────────────────────────────────────────────────────────────────
+
+function onClickCall(sx, sy) {
+  const st = hitStation(sx, sy);
+  if (!st) return;
+  if (Object.keys(state.groups).length === 0) { alert('Create a group first (Group mode).'); return; }
+  pickStation = st;
+  showGroupPicker(sx, sy);
+}
+function removeCallAt(sx, sy) {
+  const st = hitStation(sx, sy);
+  if (st) { state.callStations = state.callStations.filter(c => c.station !== st); updateHud(); }
+}
+
+// ── Pickers (action + group) ───────────────────────────────────────────────────
+
+actionPicker.querySelectorAll('button[data-action]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const g = state.groups[state.activeGroup];
+    if (g && pickStation) { g.stops.push({ station: pickStation, action: btn.dataset.action }); updateGroupsPanel(); }
+    hideActionPicker();
+  });
+});
+function showActionPicker(sx, sy) {
+  actionPicker.style.left = `${Math.min(sx, window.innerWidth - 220)}px`;
+  actionPicker.style.top  = `${Math.min(sy, window.innerHeight - 200)}px`;
+  actionPicker.style.display = 'block';
+}
+function hideActionPicker() { actionPicker.style.display = 'none'; }
+
+function showGroupPicker(sx, sy) {
+  groupPickerBody.innerHTML = '';
+  Object.keys(state.groups).forEach(id => {
+    const b = document.createElement('button');
+    b.textContent = id;
+    b.addEventListener('click', () => {
+      state.callStations = state.callStations.filter(c => c.station !== pickStation);
+      state.callStations.push({ station: pickStation, group: id });
+      hideGroupPicker(); updateHud();
+    });
+    groupPickerBody.appendChild(b);
+  });
+  groupPicker.style.left = `${Math.min(sx, window.innerWidth - 220)}px`;
+  groupPicker.style.top  = `${Math.min(sy, window.innerHeight - 200)}px`;
+  groupPicker.style.display = 'block';
+}
+function hideGroupPicker() { groupPicker.style.display = 'none'; }
+
+// ── Fleet / Sim panel ──────────────────────────────────────────────────────────
+
+function updateSimPanel() {
+  simBody.innerHTML = '';
+  const row = (label, el) => { const d = document.createElement('div'); d.className = 'dispatch-row';
+    const l = document.createElement('span'); l.className = 'dispatch-name'; l.textContent = label; d.appendChild(l); d.appendChild(el); simBody.appendChild(d); return d; };
+  const numInput = (val, on, w = 60) => { const i = document.createElement('input'); i.type = 'number'; i.value = val; i.style.width = w + 'px'; i.className = 'dispatch-st';
+    i.addEventListener('keydown', e => e.stopPropagation()); i.addEventListener('change', () => on(i.value)); return i; };
+
+  row('AGVs', numInput(state.agvs.length, v => {
+    const n = Math.max(1, Math.min(8, parseInt(v, 10) || 1));
+    const arr = []; for (let i = 0; i < n; i++) arr.push(state.agvs[i] || { id: `AGV-0${i + 1}`, color: AGV_COLORS[i % AGV_COLORS.length] });
+    state.agvs = arr; updateHud();
+  }));
+  row('Service (s)', numInput(state.sim.serviceTime, v => { state.sim.serviceTime = Math.max(0, parseFloat(v) || 0); }));
+  row('AGV px/s', numInput(state.sim.agvSpeed, v => { state.sim.agvSpeed = Math.max(1, parseFloat(v) || 120); }));
+
+  const agRow = document.createElement('label'); agRow.className = 'dispatch-enable';
+  const agc = document.createElement('input'); agc.type = 'checkbox'; agc.checked = state.sim.autoGenerate.enabled;
+  agc.addEventListener('change', () => { state.sim.autoGenerate.enabled = agc.checked; });
+  agRow.appendChild(agc); agRow.appendChild(document.createTextNode(' Auto-generate')); simBody.appendChild(agRow);
+  row('interval/seed', (() => { const wrap = document.createElement('span'); wrap.style.display = 'flex'; wrap.style.gap = '4px';
+    wrap.appendChild(numInput(state.sim.autoGenerate.meanInterval, v => state.sim.autoGenerate.meanInterval = parseFloat(v) || 6, 44));
+    wrap.appendChild(numInput(state.sim.autoGenerate.seed, v => state.sim.autoGenerate.seed = parseInt(v, 10) || 0, 56)); return wrap; })());
+
+  const lbl = document.createElement('div'); lbl.className = 'dispatch-sub'; lbl.textContent = 'Requests (t  GROUP  [AGV])'; simBody.appendChild(lbl);
+  const ta = document.createElement('textarea'); ta.className = 'dispatch-ta'; ta.rows = 3;
+  ta.value = state.sim.requests.map(r => `${r.t} ${r.group}${r.agv ? ' ' + r.agv : ''}`).join('\n');
+  ta.placeholder = '1 G-A\n2 G-B AGV-01';
+  ta.addEventListener('keydown', e => e.stopPropagation());
+  ta.addEventListener('change', () => {
+    state.sim.requests = ta.value.split('\n').map(s => s.trim()).filter(Boolean).map(s => {
+      const p = s.split(/[\s,]+/); return { t: parseFloat(p[0]) || 0, group: p[1], agv: p[2] || null };
+    }).filter(r => r.group);
+  });
+  simBody.appendChild(ta);
+}
+
+// ── HUD ────────────────────────────────────────────────────────────────────────
+
+function updateHud() {
+  hudCounts.textContent = `path: ${Object.keys(state.path.nodes).length} · stations: ${Object.keys(state.stations).length} · groups: ${Object.keys(state.groups).length} · calls: ${state.callStations.length}`;
+}
+function refreshAll() {
+  setMode(state.mode);
+  updatePathBar(); updateStationBar(); updateGroupsPanel(); updateSimPanel();
+  hudFile.textContent = `→ ${state.outputFilename}`;
+  updateHud();
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+
+function buildSaveData() {
+  const homeSlots = Object.keys(state.stations).filter(id => state.stations[id].role === 'home');
+  return {
+    PATH: { nodes: state.path.nodes, edges: state.path.edges },
+    STATIONS: state.stations,
+    AGVS: state.agvs,
+    GROUPS: state.groups,
+    CALL_STATIONS: state.callStations,
+    HOME: { slots: homeSlots },
+    SIM: state.sim,
+  };
+}
+window.buildSaveData = buildSaveData;
+window.loadIntoState = loadIntoState;
 
 function saveJSON() {
-  const agvsData = state.agvs.map(a => ({ id: a.id, color: a.color, sequence: a.sequence }));
-  const data = { NODES: state.nodes, AGVS: agvsData };
-  if (state.agvs.length === 1) data.SEQUENCE = state.agvs[0].sequence;
-  if (state.track.segments.length > 0 || Object.keys(state.track.points).length > 0)
-    data.TRACK = state.track;
-  if (state.dispatch.enabled) {
-    const d = state.dispatch;
-    data.DISPATCH = {
-      home:         d.homeSlots[0] || null,
-      homeSlots:    d.homeSlots.slice(),
-      lines:        d.lines.map(l => ({ id: l.id, node: l.node,
-                      serviceAction: l.serviceAction, serviceTime: l.serviceTime })),
-      requests:     d.requests.slice(),
-      autoGenerate: { ...d.autoGenerate },
-    };
-  }
+  const data = buildSaveData();
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const a    = document.createElement('a');
-  a.href     = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
   a.download = state.outputFilename;
   a.click();
   URL.revokeObjectURL(a.href);
 }
+window.saveJSON = saveJSON;
+$('saveBtn').addEventListener('click', saveJSON);
 
-// ── Draw loop ─────────────────────────────────────────────────────────────
+// ── Draw loop ──────────────────────────────────────────────────────────────────
 
 function drawLoop() {
   const dpr = window.devicePixelRatio || 1;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const cw = window.innerWidth, ch = window.innerHeight;
+  ctx.fillStyle = '#f4f4f6';
+  ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
 
-  ctx.fillStyle = '#f0f0f0';
-  ctx.fillRect(0, 0, cw, ch);
-
-  // Background image
   if (state.bgImage) {
     const { sx, sy } = imgToScreen(0, 0, state.view);
     ctx.drawImage(state.bgImage, sx, sy, state.imgW * state.view.zoom, state.imgH * state.view.zoom);
-    drawGrid(ctx, state.imgW, state.imgH, state.view);
   }
 
-  // ── Magnetic track ──────────────────────────────────────────────────────
-  // Segments
-  for (const seg of state.track.segments) {
-    const ptA = state.track.points[seg.from];
-    const ptB = state.track.points[seg.to];
-    if (!ptA || !ptB) continue;
-    const isLastSeg = seg.id === state.trackLastSeg;
-    strokeTrackSegment(ctx, ptA, ptB, seg, state.view);
-    ctx.strokeStyle = isLastSeg ? '#1a40e0' : TRACK_COLOR;
-    ctx.lineWidth   = 4;
-    ctx.lineCap     = 'round';
-    ctx.stroke();
+  // edges
+  for (const e of state.path.edges) {
+    const A = state.path.nodes[e.from], B = state.path.nodes[e.to];
+    if (!A || !B) continue;
+    strokeTrackSegment(ctx, A, B, e, state.view);
+    ctx.strokeStyle = 'rgba(48,80,200,0.55)'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.stroke();
   }
-  // Track points
-  for (const [id, pt] of Object.entries(state.track.points)) {
-    const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-    const isSel = id === state.trackSel;
-    if (isSel) {
-      ctx.beginPath();
-      ctx.arc(sx, sy, 11, 0, Math.PI * 2);
-      ctx.strokeStyle = TRACK_COLOR; ctx.lineWidth = 2; ctx.stroke();
-    }
-    ctx.save();
-    ctx.translate(sx, sy); ctx.rotate(Math.PI / 4);
-    ctx.beginPath(); ctx.rect(-5, -5, 10, 10);
-    ctx.fillStyle   = isSel ? '#1a40e0' : TRACK_COLOR;
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.stroke();
+  // preview edge while chaining in PATH mode
+  if (state.mode === 'PATH' && state.pathSel) {
+    const A = state.path.nodes[state.pathSel];
+    const a = imgToScreen(A.x, A.y, state.view);
+    ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(state.mouse.sx, state.mouse.sy);
+    ctx.strokeStyle = 'rgba(48,80,200,0.35)'; ctx.setLineDash([5, 5]); ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+  }
+  // corners
+  for (const [id, p] of Object.entries(state.path.nodes)) {
+    const { sx, sy } = imgToScreen(p.x, p.y, state.view);
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(Math.PI / 4);
+    ctx.beginPath(); ctx.rect(-4, -4, 8, 8);
+    ctx.fillStyle = id === state.pathSel ? '#e8a020' : 'rgba(48,80,200,0.75)'; ctx.fill();
     ctx.restore();
-    if (state.mode === 'TRACK') {
-      ctx.fillStyle = '#1a40a0'; ctx.font = '10px monospace';
-      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(id, sx + 9, sy);
-    }
-  }
-  // Preview line from selected TP to cursor
-  if (state.mode === 'TRACK' && state.trackSel) {
-    const sp = state.track.points[state.trackSel];
-    if (sp) {
-      const { sx, sy } = imgToScreen(sp.x, sp.y, state.view);
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(sx, sy);
-      ctx.lineTo(state.mouseScreen.sx, state.mouseScreen.sy);
-      ctx.strokeStyle = 'rgba(48,96,208,0.5)'; ctx.lineWidth = 1.5; ctx.stroke();
-      ctx.setLineDash([]);
-    }
   }
 
-  // Path lines for all AGVs — load-state colors + per-AGV color (Features 1 & 2)
-  state.agvs.forEach((agv, agvIdx) => {
-    const isActive = agvIdx === state.activeAgvIdx;
-    const seq = agv.sequence.filter(e => state.nodes[e.node]);
-    if (seq.length < 2) return;
-    let carrying = false;
-    for (let i = 0; i < seq.length - 1; i++) {
-      const a = seq[i].action;
-      if (a === 'pickup')   carrying = true;
-      if (a === 'release')  carrying = false;
-      if (a === 'exchange') carrying = true;
-      const ptA = state.nodes[seq[i].node];
-      const ptB = state.nodes[seq[i + 1].node];
-      const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
-      const { sx: bx, sy: by } = imgToScreen(ptB.x, ptB.y, state.view);
-      const alpha = isActive ? 1.0 : 0.4;
-      ctx.beginPath();
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(bx, by);
-      ctx.strokeStyle = carrying
-        ? hexToRgba(agv.color, 0.85 * alpha)
-        : hexToRgba(agv.color, 0.5  * alpha);
-      ctx.lineWidth   = carrying ? 3 : 2;
-      ctx.setLineDash(carrying ? [] : [6, 4]);
-      ctx.stroke();
-    }
-    ctx.setLineDash([]);
+  // station→corner link hints
+  for (const st of Object.values(state.stations)) {
+    if (!st.link || !state.path.nodes[st.link]) continue;
+    const a = imgToScreen(st.x, st.y, state.view);
+    const b = imgToScreen(state.path.nodes[st.link].x, state.path.nodes[st.link].y, state.view);
+    ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
+    ctx.strokeStyle = 'rgba(120,120,140,0.5)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
+  }
 
-    // Step labels + heading arrows for this AGV
-    seq.forEach(({ node, heading }, i) => {
-      const pt = state.nodes[node];
-      const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-      const alpha = isActive ? 1.0 : 0.4;
-      ctx.fillStyle    = hexToRgba(agv.color, alpha);
-      ctx.font         = '11px monospace';
-      ctx.textAlign    = 'left';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(String(i), sx + DOT_RADIUS + 1, sy - 2);
-      if (heading !== undefined) {
-        drawHeadingArrow(ctx, sx, sy, heading, 18, hexToRgba(agv.color, alpha), 1.5);
-      }
+  // active group path preview
+  if (state.mode === 'GROUP' && state.activeGroup) {
+    const stops = state.groups[state.activeGroup].stops.filter(s => state.stations[s.station]);
+    for (let i = 0; i < stops.length - 1; i++) {
+      const A = state.stations[stops[i].station], B = state.stations[stops[i + 1].station];
+      const a = imgToScreen(A.x, A.y, state.view), b = imgToScreen(B.x, B.y, state.view);
+      ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
+      ctx.strokeStyle = 'rgba(204,68,170,0.6)'; ctx.lineWidth = 2; ctx.stroke();
+    }
+    stops.forEach((s, i) => {
+      const p = state.stations[s.station]; const { sx, sy } = imgToScreen(p.x, p.y, state.view);
+      ctx.fillStyle = '#cc44aa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText(`${i + 1}:${s.action[0]}`, sx, sy - DOT_R - 2);
     });
-  });
+  }
 
-  // Nodes
-  for (const [id, pt] of Object.entries(state.nodes)) {
-    const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-    const col = dotColorForType(pt.type);
-
-    if (state.mode === 'SEQUENCE') {
-      if (activeSeq().some(e => e.node === id)) {
-        ctx.beginPath();
-        ctx.arc(sx, sy, DOT_RADIUS + 5, 0, Math.PI * 2);
-        ctx.strokeStyle = activeAgv().color; ctx.lineWidth = 1.5; ctx.stroke();
-      }
-      if (id === state.hoveredNode) {
-        ctx.beginPath();
-        ctx.arc(sx, sy, DOT_RADIUS + 9, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5; ctx.stroke();
-      }
+  // stations
+  const callSet = new Set(state.callStations.map(c => c.station));
+  for (const [id, st] of Object.entries(state.stations)) {
+    const { sx, sy } = imgToScreen(st.x, st.y, state.view);
+    if (st.role === 'home') {
+      ctx.beginPath(); ctx.rect(sx - DOT_R, sy - DOT_R, DOT_R * 2, DOT_R * 2);
+      ctx.fillStyle = '#cfe8ff'; ctx.fill(); ctx.strokeStyle = '#2c6fbf'; ctx.lineWidth = 1.5; ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(sx, sy, DOT_R, 0, Math.PI * 2);
+      ctx.fillStyle = '#50DC78'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
     }
-
-    ctx.beginPath();
-    ctx.arc(sx, sy, DOT_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle = col; ctx.fill();
-    ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.stroke();
-
-    ctx.fillStyle    = '#1a1a2a';
-    ctx.font         = 'bold 11px monospace';
-    ctx.textAlign    = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`${id} (${pt.x},${pt.y})`, sx + DOT_RADIUS + 3, sy);
+    if (callSet.has(id)) {
+      const c = state.callStations.find(x => x.station === id);
+      ctx.beginPath(); ctx.arc(sx, sy, DOT_R + 7, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(230,160,32,0.9)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#9a6800'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText('▶' + c.group, sx, sy - DOT_R - 9);
+    }
+    ctx.fillStyle = '#1a1a2a'; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(id, sx + DOT_R + 3, sy);
   }
 
-  // Radial menu
-  if (radial.active) {
-    if (radial.phase === 'type_select')  drawTypeSelectRadial();
-    if (radial.phase === 'angle_select') drawAngleSelectRadial();
-  }
+  // hud coords
+  const { ix, iy } = toImg(state.mouse.sx, state.mouse.sy);
+  hudCoords.textContent = `(${Math.round(ix)}, ${Math.round(iy)})`;
+  hudZoom.textContent = `zoom: ${state.view.zoom.toFixed(2)}×`;
 
-  // Crosshair (NODE/TRACK mode, no radial)
-  if ((state.mode === 'NODE' || state.mode === 'TRACK') && !radial.active && !startupModal.open) {
-    ctx.strokeStyle = 'rgba(200,40,40,0.5)';
-    ctx.lineWidth   = 1;
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.moveTo(state.mouseScreen.sx, 0); ctx.lineTo(state.mouseScreen.sx, ch); ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, state.mouseScreen.sy); ctx.lineTo(cw, state.mouseScreen.sy); ctx.stroke();
-  }
-
-  drawHeadingLegend(ctx, cw);
   requestAnimationFrame(drawLoop);
 }

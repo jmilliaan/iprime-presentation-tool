@@ -207,9 +207,7 @@ function updateWalker(w, dt) {
         w.currentTrackPt = nextTpId;
         w.trackPathIdx++;
       } else {
-        // Arrived at destination node
-        const entryHeading = w.sequence[w.currentStep]?.heading;
-        if (entryHeading !== undefined) w.agvHeading = entryHeading;
+        // Arrived at destination node — facing stays auto (toward travel)
         if (targetNode.trackPoint) w.currentTrackPt = targetNode.trackPoint;
         w.phase       = 'action_pause';
         w.actionTimer = 0;
@@ -318,24 +316,24 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (ev) => {
     try {
-      const data  = JSON.parse(ev.target.result);
-      state.nodes = data.NODES || {};
-      state.track = normaliseTrack(data.TRACK);
-      state.agvs  = normaliseAGVS(data).map(agvDef => makeWalker(agvDef));
-      if (state.agvs.length === 0)
-        state.agvs = [makeWalker({ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] })];
-      const isDispatch = Dispatch.init(data);
-      const totalSteps = state.agvs.reduce((s, w) => s + w.sequence.length, 0);
-      document.getElementById('loadStatus').textContent = isDispatch
-        ? `${file.name} — ${Object.keys(state.nodes).length} nodes · ${state.agvs.length} AGV(s) · ${Dispatch.lineIds().length} lines · DISPATCH`
-        : `${file.name} — ${Object.keys(state.nodes).length} nodes · ${state.agvs.length} AGV(s) · ${totalSteps} steps`;
+      const data   = JSON.parse(ev.target.result);
+      const layout = normaliseLayout(data);
+      state.nodes    = layout.stations;       // stations (action sites + home)
+      state.track    = layout.path;           // path geometry (corners + edges)
+      state.agvs     = layout.agvs.map(makeWalker);
+      state.agvSpeed = layout.sim.agvSpeed;
+      document.getElementById('agvSpeedInput').value = layout.sim.agvSpeed;
+      Dispatch.init(layout);
+      document.getElementById('loadStatus').textContent =
+        `${file.name} — ${Object.keys(state.nodes).length} stations · ${state.agvs.length} AGV(s) · ` +
+        `${Dispatch.groupIds().length} groups · ${Dispatch.callStations().length} call points`;
       state.playing = false;
       updatePlayButton();
-      buildDispatchControls();
+      buildDispatchUI();
       resetAllWalkers();
       updateStatusBadge();
       updateStepCounter();
-    } catch { alert('Invalid JSON file.'); }
+    } catch (err) { console.warn(err); alert('Invalid or unreadable layout JSON.'); }
   };
   reader.readAsText(file);
 });
@@ -398,32 +396,16 @@ function updateStepCounter() {
   }
 }
 
-// Build the per-line "Call" buttons + auto-generate toggle from the loaded
-// dispatch layout. Hidden entirely in scripted mode.
-function buildDispatchControls() {
+// Dispatch toolbar UI. Group calls are made by clicking the on-canvas call
+// markers, so the toolbar only carries the Auto-generate toggle + a hint.
+function buildDispatchUI() {
   const wrap = document.getElementById('dispatchControls');
   if (!wrap) return;
   wrap.innerHTML = '';
   if (!Dispatch.isActive()) { wrap.style.display = 'none'; return; }
   wrap.style.display = 'flex';
 
-  const label = document.createElement('label');
-  label.textContent = 'Call';
-  wrap.appendChild(label);
-
-  Dispatch.lineIds().forEach(id => {
-    const btn = document.createElement('button');
-    btn.textContent = id;
-    btn.className   = 'call-btn';
-    btn.addEventListener('click', () => {
-      Dispatch.enqueue({ line: id });
-      if (!state.playing) { state.playing = true; updatePlayButton(); }
-    });
-    wrap.appendChild(btn);
-  });
-
   const autoWrap = document.createElement('label');
-  autoWrap.style.marginLeft = '6px';
   const auto = document.createElement('input');
   auto.type    = 'checkbox';
   auto.checked = dispatch.autoGenerate.enabled;
@@ -432,8 +414,24 @@ function buildDispatchControls() {
     if (e.target.checked) dispatch.nextGenTime = Dispatch._nextInterval();
   });
   autoWrap.appendChild(auto);
-  autoWrap.appendChild(document.createTextNode(' Auto'));
+  autoWrap.appendChild(document.createTextNode(' Auto-call'));
   wrap.appendChild(autoWrap);
+
+  const hint = document.createElement('label');
+  hint.style.color = '#9a6800';
+  hint.textContent = 'click a call point to dispatch';
+  wrap.appendChild(hint);
+}
+
+// Fire the group of whatever call marker is under the given screen point.
+function callMarkerAt(sx, sy) {
+  for (const c of Dispatch.callStations()) {
+    const st = state.nodes[c.station];
+    if (!st) continue;
+    const { sx: mx, sy: my } = imgToScreen(st.x, st.y, state.view);
+    if (Math.hypot(sx - mx, sy - my) <= AGV_SIZE / 2 + 6) return c;
+  }
+  return null;
 }
 
 btnPlayPause.addEventListener('click', () => {
@@ -548,26 +546,48 @@ function stopRecording() {
 
 // ── Pan + zoom ────────────────────────────────────────────────────────────
 
+// Left-press tracking so a click (no drag) can fire a call marker without
+// being confused with a pan.
+const leftPress = { down: false, sx: 0, sy: 0, moved: false };
+
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 1) {
     e.preventDefault();
     state.isPanning    = true;
     state.panStart     = { sx: e.clientX, sy: e.clientY };
     state.panViewStart = { offsetX: state.view.offsetX, offsetY: state.view.offsetY };
+  } else if (e.button === 0) {
+    leftPress.down = true; leftPress.moved = false;
+    leftPress.sx = e.clientX; leftPress.sy = e.clientY;
   }
 });
 
 canvas.addEventListener('mouseup', (e) => {
   if (e.button === 1) state.isPanning = false;
+  if (e.button === 0 && leftPress.down) {
+    leftPress.down = false;
+    if (!leftPress.moved) {
+      const hit = callMarkerAt(e.clientX, e.clientY - BAR_TOP);
+      if (hit) {
+        Dispatch.enqueue({ group: hit.group });
+        if (!state.playing) { state.playing = true; updatePlayButton(); }
+      }
+    }
+  }
 });
 
 canvas.addEventListener('mousemove', (e) => {
   state.mouse.sx = e.clientX;
   state.mouse.sy = e.clientY - BAR_TOP;
+  if (leftPress.down && Math.hypot(e.clientX - leftPress.sx, e.clientY - leftPress.sy) > 4)
+    leftPress.moved = true;
   if (state.isPanning) {
     state.view.offsetX = state.panViewStart.offsetX + (e.clientX - state.panStart.sx);
     state.view.offsetY = state.panViewStart.offsetY + (e.clientY - state.panStart.sy);
   }
+  // pointer cursor when hovering a call marker
+  canvas.style.cursor = (Dispatch.isActive() && callMarkerAt(e.clientX, e.clientY - BAR_TOP))
+    ? 'pointer' : 'default';
 });
 
 canvas.addEventListener('wheel', (e) => {
@@ -776,22 +796,22 @@ function drawScene(timestamp) {
       .map(w => w.sequence[w.currentStep].node)
   );
 
-  // Node dots
-  for (const [id, pt] of Object.entries(state.nodes)) {
-    const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-    const col = dotColorForType(pt.type);
-
+  // ── Stations: home slots (squares) and action sites (circles) ────────────
+  for (const [id, st] of Object.entries(state.nodes)) {
+    const { sx, sy } = imgToScreen(st.x, st.y, state.view);
     if (activeTargetIds.has(id)) drawActivePulse(sx, sy, state.elapsed);
 
-    ctx.beginPath();
-    ctx.arc(sx, sy, DOT_RADIUS, 0, Math.PI * 2);
-    ctx.fillStyle   = col;
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth   = 1;
-    ctx.stroke();
-
-    drawHeadingArrow(ctx, sx, sy, pt.heading, 18, col, 1.5);
+    if (st.role === 'home') {
+      ctx.beginPath();
+      ctx.rect(sx - DOT_RADIUS, sy - DOT_RADIUS, DOT_RADIUS * 2, DOT_RADIUS * 2);
+      ctx.fillStyle   = '#cfe8ff'; ctx.fill();
+      ctx.strokeStyle = '#2c6fbf'; ctx.lineWidth = 1.5; ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(sx, sy, DOT_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle   = '#50DC78'; ctx.fill();
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.stroke();
+    }
 
     if (state.showLabels) {
       ctx.fillStyle    = '#1a1a2a';
@@ -802,20 +822,27 @@ function drawScene(timestamp) {
     }
   }
 
-  // Sequence step labels per AGV
-  if (state.showLabels) {
-    state.agvs.forEach(agv => {
-      agv.sequence.filter(e => state.nodes[e.node]).forEach(({ node, action }, i) => {
-        const pt = state.nodes[node];
-        const { sx, sy } = imgToScreen(pt.x, pt.y, state.view);
-        ctx.fillStyle    = hexToRgba(agv.color, 0.9);
-        ctx.font         = '10px monospace';
-        ctx.textAlign    = 'left';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(`${i}:${action[0]}`, sx + DOT_RADIUS + 1, sy - 2);
-      });
-    });
-  }
+  // ── Call markers (clickable) ─────────────────────────────────────────────
+  const pending = Dispatch.isActive() ? Dispatch.pendingByGroup() : {};
+  Dispatch.callStations().forEach(c => {
+    const st = state.nodes[c.station];
+    if (!st) return;
+    const { sx, sy } = imgToScreen(st.x, st.y, state.view);
+    const r     = AGV_SIZE / 2 + 6;
+    const pulse = 0.45 + 0.55 * Math.abs(Math.sin(state.elapsed * 3));
+    ctx.beginPath();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(230,160,32,${pulse.toFixed(2)})`;
+    ctx.lineWidth   = 2.5;
+    ctx.stroke();
+
+    const q = pending[c.group] || 0;
+    ctx.fillStyle    = '#9a6800';
+    ctx.font         = 'bold 10px monospace';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`▶ ${c.group}${q ? ` (${q})` : ''}`, sx, sy - r - 2);
+  });
 
   const conflicts = detectConflicts();
 
@@ -939,10 +966,10 @@ function drawHUD(cw, ch) {
       x += ctx.measureText(more).width;
     }
     if (Dispatch.isActive()) {
-      const pend = Dispatch.pendingByLine();
-      const perLine = Dispatch.lineIds().map(id => `${id}:${pend[id] || 0}`).join('  ');
+      const pend = Dispatch.pendingByGroup();
+      const perGroup = Dispatch.groupIds().map(id => `${id}:${pend[id] || 0}`).join('  ');
       ctx.fillStyle = '#9090a8';
-      const qtxt = `   Queue: ${Dispatch.queueLength()}   ${perLine}`;
+      const qtxt = `   Queue: ${Dispatch.queueLength()}   ${perGroup}`;
       ctx.fillText(qtxt, x, ch - 11);
       x += ctx.measureText(qtxt).width;
     }

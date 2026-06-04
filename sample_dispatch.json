@@ -1,51 +1,59 @@
 {
-  "NODES": {
-    "HS-1": { "x": 200, "y": 180, "type": "seq_point", "trackPoint": "TP-HS1", "heading": 0 },
-    "HS-2": { "x": 200, "y": 300, "type": "seq_point", "trackPoint": "TP-HS2", "heading": 0 },
-    "HS-3": { "x": 200, "y": 420, "type": "seq_point", "trackPoint": "TP-HS3", "heading": 0 },
-    "LA":   { "x": 820, "y": 180, "type": "seq_point", "trackPoint": "TP-LA",  "heading": 180 },
-    "LB":   { "x": 820, "y": 300, "type": "seq_point", "trackPoint": "TP-LB",  "heading": 180 },
-    "LC":   { "x": 820, "y": 420, "type": "seq_point", "trackPoint": "TP-LC",  "heading": 180 }
-  },
-  "AGVS": [
-    { "id": "AGV-01", "color": "#E63946", "sequence": [] },
-    { "id": "AGV-02", "color": "#4080e0", "sequence": [] },
-    { "id": "AGV-03", "color": "#1a9c50", "sequence": [] }
-  ],
-  "TRACK": {
-    "points": {
-      "TP-HS1": { "x": 200, "y": 180 },
-      "TP-HS2": { "x": 200, "y": 300 },
-      "TP-HS3": { "x": 200, "y": 420 },
-      "TP-H":   { "x": 510, "y": 300 },
-      "TP-LA":  { "x": 820, "y": 180 },
-      "TP-LB":  { "x": 820, "y": 300 },
-      "TP-LC":  { "x": 820, "y": 420 }
+  "PATH": {
+    "nodes": {
+      "P-1": { "x": 200, "y": 180 },
+      "P-2": { "x": 200, "y": 300 },
+      "P-3": { "x": 200, "y": 420 },
+      "P-H": { "x": 510, "y": 300 },
+      "P-4": { "x": 820, "y": 180 },
+      "P-5": { "x": 820, "y": 300 },
+      "P-6": { "x": 820, "y": 420 }
     },
-    "segments": [
-      { "id": "S0", "from": "TP-HS1", "to": "TP-H", "type": "straight" },
-      { "id": "S1", "from": "TP-HS2", "to": "TP-H", "type": "straight" },
-      { "id": "S2", "from": "TP-HS3", "to": "TP-H", "type": "straight" },
-      { "id": "S3", "from": "TP-H",   "to": "TP-LA", "type": "straight" },
-      { "id": "S4", "from": "TP-H",   "to": "TP-LB", "type": "straight" },
-      { "id": "S5", "from": "TP-H",   "to": "TP-LC", "type": "straight" }
+    "edges": [
+      { "id": "E-1", "from": "P-1", "to": "P-H", "type": "straight" },
+      { "id": "E-2", "from": "P-2", "to": "P-H", "type": "straight" },
+      { "id": "E-3", "from": "P-3", "to": "P-H", "type": "straight" },
+      { "id": "E-4", "from": "P-H", "to": "P-4", "type": "straight" },
+      { "id": "E-5", "from": "P-H", "to": "P-5", "type": "straight" },
+      { "id": "E-6", "from": "P-H", "to": "P-6", "type": "straight" }
     ]
   },
-  "DISPATCH": {
-    "home": "HS-1",
-    "homeSlots": ["HS-1", "HS-2", "HS-3"],
-    "lines": [
-      { "id": "LINE-A", "node": "LA", "serviceAction": "exchange", "serviceTime": 3 },
-      { "id": "LINE-B", "node": "LB", "serviceAction": "exchange", "serviceTime": 3 },
-      { "id": "LINE-C", "node": "LC", "serviceAction": "exchange", "serviceTime": 3 }
-    ],
+  "STATIONS": {
+    "HS-1": { "x": 175, "y": 180, "role": "home",   "link": "P-1" },
+    "HS-2": { "x": 175, "y": 300, "role": "home",   "link": "P-2" },
+    "HS-3": { "x": 175, "y": 420, "role": "home",   "link": "P-3" },
+    "LA":   { "x": 848, "y": 180, "role": "action", "link": "P-4" },
+    "LB":   { "x": 848, "y": 300, "role": "action", "link": "P-5" },
+    "LC":   { "x": 848, "y": 420, "role": "action", "link": "P-6" }
+  },
+  "AGVS": [
+    { "id": "AGV-01", "color": "#E63946" },
+    { "id": "AGV-02", "color": "#4080e0" },
+    { "id": "AGV-03", "color": "#1a9c50" }
+  ],
+  "GROUPS": {
+    "G-A":  { "name": "Serve A",      "stops": [ { "station": "LA", "action": "exchange" } ] },
+    "G-B":  { "name": "Serve B",      "stops": [ { "station": "LB", "action": "exchange" } ] },
+    "G-C":  { "name": "Serve C",      "stops": [ { "station": "LC", "action": "exchange" } ] },
+    "G-AB": { "name": "A pick, B drop","stops": [ { "station": "LA", "action": "pickup" },
+                                                  { "station": "LB", "action": "release" } ] }
+  },
+  "CALL_STATIONS": [
+    { "station": "LA", "group": "G-A" },
+    { "station": "LB", "group": "G-B" },
+    { "station": "LC", "group": "G-C" }
+  ],
+  "HOME": { "slots": ["HS-1", "HS-2", "HS-3"] },
+  "SIM": {
+    "agvSpeed": 120,
+    "serviceTime": 3,
     "requests": [
-      { "t": 1, "line": "LINE-A" },
-      { "t": 2, "line": "LINE-B" },
-      { "t": 3, "line": "LINE-C" },
-      { "t": 7, "line": "LINE-A", "agv": "AGV-01" },
-      { "t": 8, "line": "LINE-B" },
-      { "t": 9, "line": "LINE-C" }
+      { "t": 1, "group": "G-A" },
+      { "t": 2, "group": "G-B" },
+      { "t": 3, "group": "G-C" },
+      { "t": 5, "group": "G-AB" },
+      { "t": 7, "group": "G-A", "agv": "AGV-01" },
+      { "t": 8, "group": "G-C" }
     ],
     "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
   }
