@@ -22,7 +22,7 @@ const state = {
   agvs:     [{ id: 'AGV-01', color: AGV_COLORS[0] }],
   groups:   {},                           // id -> {name, stops:[{station,action,dwell?}]}
   activeGroup:  null,
-  callStations: [],                       // [{station,group}]
+  calls:    [],                           // [{x,y,group}] — free-floating call buttons
   sim: { agvSpeed: 120, serviceTime: 3, requests: [],
          autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } },
 
@@ -55,8 +55,9 @@ const hudCoords = $('hudCoords'), hudZoom = $('hudZoom'), hudCounts = $('hudCoun
 const startupModal = $('startupModal'), confirmClearModal = $('confirmClearModal');
 const filenameInput = $('filenameInput'), loadJsonInput = $('loadJsonInput'), loadImgInput = $('loadImgInput');
 
-// transient pick context (which station the action/group picker is acting on)
-let pickNode = null;
+// transient pick context
+let pickTarget = null;   // action picker: {kind:'stop',node} | {kind:'homeStart'} | {kind:'homeEnd'}
+let pendingCall = null;  // group picker (CALL mode): { x, y } of the new call marker
 
 // ── Canvas sizing ─────────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ $('confirmClearCancel').addEventListener('click', () => confirmClearModal.close(
 $('confirmClearOk').addEventListener('click', () => {
   confirmClearModal.close();
   state.path = { nodes: {}, edges: [] };
-  state.stations = {}; state.callStations = []; state.groups = {}; state.activeGroup = null;
+  state.stations = {}; state.calls = []; state.groups = {}; state.activeGroup = null;
   state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
   state.sim = { agvSpeed: 120, serviceTime: 3, requests: [],
                 autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
@@ -141,14 +142,22 @@ function loadIntoState(data) {
     state.stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action' };
   state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
   if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
+  const mapAct = a => (a === 'pickup' || a === 'exchange') ? 'full' : (a === 'release') ? 'none'
+    : (['move', 'none', 'empty', 'full'].includes(a) ? a : 'move');
+  const mapHome = a => (a == null ? null : (['none', 'empty', 'full'].includes(mapAct(a)) ? mapAct(a) : null));
   state.groups = {};
   for (const [id, g] of Object.entries(data.GROUPS || {}))
-    state.groups[id] = { name: g.name || id, stops: (g.stops || []).map(st => {
-      const o = { node: st.node, action: st.action || 'move' };
-      if (st.dwell !== undefined) o.dwell = st.dwell;
-      return o;
-    }) };
-  state.callStations = (data.CALL_STATIONS || []).map(c => ({ station: c.station, group: c.group }));
+    state.groups[id] = { name: g.name || id, homeStart: mapHome(g.homeStart), homeEnd: mapHome(g.homeEnd),
+      stops: (g.stops || []).map(st => {
+        const o = { node: st.node, action: mapAct(st.action) };
+        if (st.dwell !== undefined) o.dwell = st.dwell;
+        return o;
+      }) };
+  state.calls = (data.CALLS || []).filter(c => c && typeof c.x === 'number').map(c => ({ x: c.x, y: c.y, group: c.group }));
+  (data.CALL_STATIONS || []).forEach(c => {   // legacy: anchor to the station's position
+    const s = (data.STATIONS || {})[c.station];
+    if (s) state.calls.push({ x: s.x, y: s.y, group: c.group });
+  });
   const sim = data.SIM || {};
   const ag = sim.autoGenerate || {};
   state.sim = {
@@ -368,31 +377,27 @@ function undoStation() {
   const last = ids[ids.length - 1];
   delete state.stations[last];
   // cascade: drop references
-  state.callStations = state.callStations.filter(c => c.station !== last);
   for (const g of Object.values(state.groups)) g.stops = g.stops.filter(s => s.node !== last);
   updateHud(); updateGroupsPanel();
 }
 
 // ── GROUP mode ─────────────────────────────────────────────────────────────────
 
+function newGroup() { const id = nextGroupId(); state.groups[id] = { name: id, stops: [], homeStart: null, homeEnd: null }; return id; }
 $('newGroupBtn').addEventListener('click', () => {
-  const id = nextGroupId();
-  state.groups[id] = { name: id, stops: [] };
-  state.activeGroup = id;
+  state.activeGroup = newGroup();
   updateGroupsPanel(); updateGroupBar();
 });
 function ensureActiveGroup() {
-  if (!state.activeGroup) {
-    const id = nextGroupId(); state.groups[id] = { name: id, stops: [] }; state.activeGroup = id; updateGroupsPanel();
-  }
+  if (!state.activeGroup) { state.activeGroup = newGroup(); updateGroupsPanel(); }
 }
 function onClickGroup(sx, sy) {
   ensureActiveGroup();
-  // Action station → ask the action. Home stations are excluded from groups.
+  // Action station → ask the load. Home stations are excluded from groups.
   const st = hitStation(sx, sy);
   if (st) {
     if (state.stations[st].role === 'home') return;
-    pickNode = st;
+    pickTarget = { kind: 'stop', node: st };
     showActionPicker(sx, sy);
     return;
   }
@@ -403,6 +408,15 @@ function onClickGroup(sx, sy) {
     updateGroupsPanel();
   }
 }
+// Home-start / Home-end buttons (group bar) — abstract actions at the AGV's own home.
+function pickHome(kind) {
+  ensureActiveGroup();
+  pickTarget = { kind };
+  const r = $('groupBar').getBoundingClientRect();
+  showActionPicker(r.left + 40, r.top - 150);
+}
+$('homeStartBtn').addEventListener('click', () => pickHome('homeStart'));
+$('homeEndBtn').addEventListener('click', () => pickHome('homeEnd'));
 function undoGroupStop() {
   const g = state.groups[state.activeGroup];
   if (g && g.stops.length) { g.stops.pop(); updateGroupsPanel(); }
@@ -423,7 +437,7 @@ function updateGroupsPanel() {
     del.addEventListener('click', (ev) => {
       ev.stopPropagation();
       delete state.groups[id];
-      state.callStations = state.callStations.filter(c => c.group !== id);
+      state.calls = state.calls.filter(c => c.group !== id);
       if (state.activeGroup === id) state.activeGroup = Object.keys(state.groups)[0] || null;
       updateGroupsPanel(); updateGroupBar();
     });
@@ -432,6 +446,13 @@ function updateGroupsPanel() {
     groupsBody.appendChild(row);
 
     if (id === state.activeGroup) {
+      const homeRow = (label, val) => {
+        const hr = document.createElement('div');
+        hr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;color:#2c6fbf;';
+        hr.innerHTML = `<span style="flex:1;">${label}</span><span>${val || '—'}</span>`;
+        groupsBody.appendChild(hr);
+      };
+      homeRow('home-start', g.homeStart);
       g.stops.forEach((s, i) => {
         const sr = document.createElement('div');
         sr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;';
@@ -439,6 +460,7 @@ function updateGroupsPanel() {
         sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${s.node}</span><span style="color:${isStation ? '#1a6828' : '#888'};">${isStation ? s.action : '·'}</span>`;
         groupsBody.appendChild(sr);
       });
+      homeRow('home-end', g.homeEnd);
     }
   }
   updateGroupBar(); updateHud();
@@ -447,15 +469,20 @@ function updateGroupsPanel() {
 // ── CALL mode ──────────────────────────────────────────────────────────────────
 
 function onClickCall(sx, sy) {
-  const st = hitStation(sx, sy);
-  if (!st) return;
   if (Object.keys(state.groups).length === 0) { alert('Create a group first (Group mode).'); return; }
-  pickNode = st;
+  const { ix, iy } = toImg(sx, sy);
+  pendingCall = { x: Math.round(ix), y: Math.round(iy) };   // place anywhere
   showGroupPicker(sx, sy);
 }
 function removeCallAt(sx, sy) {
-  const st = hitStation(sx, sy);
-  if (st) { state.callStations = state.callStations.filter(c => c.station !== st); updateHud(); }
+  // remove the nearest call marker within hit radius
+  let best = -1, bd = STATION_HIT;
+  state.calls.forEach((c, i) => {
+    const s = imgToScreen(c.x, c.y, state.view);
+    const d = Math.hypot(sx - s.sx, sy - s.sy);
+    if (d < bd) { bd = d; best = i; }
+  });
+  if (best >= 0) { state.calls.splice(best, 1); updateHud(); }
 }
 
 // ── Pickers (action + group) ───────────────────────────────────────────────────
@@ -463,7 +490,14 @@ function removeCallAt(sx, sy) {
 actionPicker.querySelectorAll('button[data-action]').forEach(btn => {
   btn.addEventListener('click', () => {
     const g = state.groups[state.activeGroup];
-    if (g && pickNode) { g.stops.push({ node: pickNode, action: btn.dataset.action }); updateGroupsPanel(); }
+    const act = btn.dataset.action;   // none | empty | full
+    if (g && pickTarget) {
+      if (pickTarget.kind === 'stop')           g.stops.push({ node: pickTarget.node, action: act });
+      else if (pickTarget.kind === 'homeStart') g.homeStart = act;
+      else if (pickTarget.kind === 'homeEnd')   g.homeEnd   = act;
+      updateGroupsPanel();
+    }
+    pickTarget = null;
     hideActionPicker();
   });
 });
@@ -480,8 +514,8 @@ function showGroupPicker(sx, sy) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => {
-      state.callStations = state.callStations.filter(c => c.station !== pickNode);
-      state.callStations.push({ station: pickNode, group: id });
+      if (pendingCall) state.calls.push({ x: pendingCall.x, y: pendingCall.y, group: id });
+      pendingCall = null;
       hideGroupPicker(); updateHud();
     });
     groupPickerBody.appendChild(b);
@@ -533,7 +567,7 @@ function updateSimPanel() {
 // ── HUD ────────────────────────────────────────────────────────────────────────
 
 function updateHud() {
-  hudCounts.textContent = `path: ${Object.keys(state.path.nodes).length} · stations: ${Object.keys(state.stations).length} · groups: ${Object.keys(state.groups).length} · calls: ${state.callStations.length}`;
+  hudCounts.textContent = `path: ${Object.keys(state.path.nodes).length} · stations: ${Object.keys(state.stations).length} · groups: ${Object.keys(state.groups).length} · calls: ${state.calls.length}`;
 }
 function refreshAll() {
   setMode(state.mode);
@@ -551,7 +585,7 @@ function buildSaveData() {
     STATIONS: state.stations,
     AGVS: state.agvs,
     GROUPS: state.groups,
-    CALL_STATIONS: state.callStations,
+    CALLS: state.calls,
     HOME: { slots: homeSlots },
     SIM: state.sim,
   };
@@ -625,7 +659,6 @@ function drawLoop() {
   }
 
   // stations
-  const callSet = new Set(state.callStations.map(c => c.station));
   for (const [id, st] of Object.entries(state.stations)) {
     const { sx, sy } = imgToScreen(st.x, st.y, state.view);
     if (st.role === 'home') {
@@ -635,15 +668,18 @@ function drawLoop() {
       ctx.beginPath(); ctx.arc(sx, sy, DOT_R, 0, Math.PI * 2);
       ctx.fillStyle = '#50DC78'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
     }
-    if (callSet.has(id)) {
-      const c = state.callStations.find(x => x.station === id);
-      ctx.beginPath(); ctx.arc(sx, sy, DOT_R + 7, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(230,160,32,0.9)'; ctx.lineWidth = 2; ctx.stroke();
-      ctx.fillStyle = '#9a6800'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText('▶' + c.group, sx, sy - DOT_R - 9);
-    }
     ctx.fillStyle = '#1a1a2a'; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(id, sx + DOT_R + 3, sy);
+  }
+
+  // free-floating call markers
+  for (const c of state.calls) {
+    const { sx, sy } = imgToScreen(c.x, c.y, state.view);
+    ctx.beginPath(); ctx.arc(sx, sy, DOT_R + 7, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,248,232,0.9)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(230,160,32,0.95)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = '#9a6800'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('▶' + c.group, sx, sy);
   }
 
   // hud coords

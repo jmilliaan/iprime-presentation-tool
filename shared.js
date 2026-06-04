@@ -260,6 +260,15 @@ function normaliseLayout(data) {
   // A group node may be a path corner OR a station.
   const nodeExists = id => !!points[id] || !!stations[id];
 
+  // A stop's action sets the AGV's towed-trolley load (move = pass-through).
+  // Legacy verbs are mapped so older files still load.
+  const normAction = a => {
+    if (a === 'pickup' || a === 'exchange') return 'full';
+    if (a === 'release') return 'none';
+    return ['move', 'none', 'empty', 'full'].includes(a) ? a : 'move';
+  };
+  const normHomeAct = a => (a == null ? null : (['none', 'empty', 'full'].includes(normAction(a)) ? normAction(a) : null));
+
   // GROUPS — explicit ordered node lists (home excluded; added per-AGV at run time)
   const groups = {};
   for (const [id, g] of Object.entries(data.GROUPS || {})) {
@@ -267,22 +276,26 @@ function normaliseLayout(data) {
     const stops = (g.stops || [])
       .filter(st => st && nodeExists(st.node))
       .map(st => {
-        const o = {
-          node:   st.node,
-          action: ['pickup', 'release', 'exchange', 'move'].includes(st.action) ? st.action : 'move',
-        };
+        const o = { node: st.node, action: normAction(st.action) };
         if (typeof st.dwell === 'number') o.dwell = st.dwell;
         if (st.label) o.label = st.label;
         if (st.mode === 'manual') o.mode = 'manual';
         return o;
       });
-    groups[id] = { name: g.name || id, stops };
+    groups[id] = { name: g.name || id, stops, homeStart: normHomeAct(g.homeStart), homeEnd: normHomeAct(g.homeEnd) };
   }
 
-  // CALL_STATIONS — only those pointing at a real station + group
-  const callStations = (data.CALL_STATIONS || [])
-    .filter(c => c && stations[c.station] && groups[c.group])
-    .map(c => ({ station: c.station, group: c.group }));
+  // CALLS — free-floating call buttons { x, y, group }. Legacy CALL_STATIONS
+  // (anchored to a station) are converted using that station's position.
+  const calls = [];
+  (data.CALLS || []).forEach(c => {
+    if (c && groups[c.group] && typeof c.x === 'number' && typeof c.y === 'number')
+      calls.push({ x: c.x, y: c.y, group: c.group });
+  });
+  (data.CALL_STATIONS || []).forEach(c => {
+    if (c && groups[c.group] && stations[c.station])
+      calls.push({ x: stations[c.station].x, y: stations[c.station].y, group: c.group });
+  });
 
   // HOME slots — valid station ids only
   const homeSlots = ((data.HOME && data.HOME.slots) || []).filter(id => stations[id]);
@@ -304,5 +317,5 @@ function normaliseLayout(data) {
     },
   };
 
-  return { path, stations, agvs, groups, callStations, homeSlots, sim };
+  return { path, stations, agvs, groups, calls, homeSlots, sim };
 }

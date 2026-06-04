@@ -12,9 +12,9 @@
 const dispatch = {
   mode:        'idle',       // 'idle' | 'dispatch'
   homeSlots:   [],
-  groups:      {},           // id -> { name, stops:[{station,action,dwell?,label?,mode?}] }
+  groups:      {},           // id -> { name, stops:[{node,action,...}], homeStart, homeEnd }
   groupOrder:  [],
-  callStations: [],          // [{ station, group }]
+  calls:       [],           // [{ x, y, group }] — free-floating call buttons
   serviceTime: 3,
   queue:       [],           // FIFO of { group, agv }
   reserved:    new Map(),    // trackPointId -> agvId holding it
@@ -33,7 +33,7 @@ const Dispatch = {
   init(layout) {
     dispatch.groups       = layout.groups || {};
     dispatch.groupOrder   = Object.keys(dispatch.groups);
-    dispatch.callStations = layout.callStations || [];
+    dispatch.calls        = layout.calls || [];
     dispatch.homeSlots    = layout.homeSlots || [];
     dispatch.serviceTime  = layout.sim.serviceTime;
     dispatch.requests     = layout.sim.requests || [];
@@ -100,8 +100,8 @@ const Dispatch = {
     return counts;
   },
 
-  groupIds()     { return dispatch.groupOrder.slice(); },
-  callStations() { return dispatch.callStations; },
+  groupIds() { return dispatch.groupOrder.slice(); },
+  calls()    { return dispatch.calls; },
 
   // Short status label for one walker (HUD).
   stateLabel(w) {
@@ -136,8 +136,7 @@ const Dispatch = {
       w.sequence     = [];
       w.currentStep  = 0;
       w.actionTimer  = 0;
-      w.trolleyState = 'empty';
-      w.trolleyPos   = null;
+      w.load         = 'none';
       w.phase        = 'parked';
       w.job          = null;
       w.waiting      = false;
@@ -192,22 +191,25 @@ const Dispatch = {
     }
   },
 
-  // Build the walker's sequence: the group's explicit nodes, then a straight
-  // return to THIS AGV's own home. The AGV is parked at home, so its first move
-  // (home → group's first node) is also a straight leg.
+  // Build the walker's sequence: an optional home-start action, the group's
+  // explicit nodes, then a return to THIS AGV's own home (with an optional
+  // home-end action). The AGV is parked at home, so the home legs are straight.
   _startJob(w, groupId) {
     const g = dispatch.groups[groupId];
-    if (!g || g.stops.length === 0 || !w.homeSlot) return;
-    const stops = g.stops.map(s => {
-      const o = { node: s.node, action: s.action,
-                  dwell: s.dwell ?? (s.action === 'move' ? 0 : dispatch.serviceTime) };
+    if (!g || (g.stops.length === 0 && !g.homeStart && !g.homeEnd) || !w.homeSlot) return;
+    const dwellFor = a => (a === 'move' ? 0 : dispatch.serviceTime);
+    const seq = [];
+    if (g.homeStart) seq.push({ node: w.homeSlot, action: g.homeStart, dwell: dispatch.serviceTime });
+    g.stops.forEach(s => {
+      const o = { node: s.node, action: s.action, dwell: s.dwell ?? dwellFor(s.action) };
       if (s.label) o.label = s.label;
       if (s.mode === 'manual') o.mode = 'manual';
-      return o;
+      seq.push(o);
     });
+    seq.push({ node: w.homeSlot, action: g.homeEnd || 'move', dwell: g.homeEnd ? dispatch.serviceTime : 0 });
     w.job         = groupId;
     w.waiting     = false;
-    w.sequence    = [...stops, { node: w.homeSlot, action: 'move', dwell: 0 }];
+    w.sequence    = seq;
     w.currentStep = 0;
     w.actionTimer = 0;
     routeWalkerToStep(w);   // animplayer.js — starts the straight move to step 0

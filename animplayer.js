@@ -6,14 +6,15 @@ const ctx    = canvas.getContext('2d');
 const BAR_TOP    = 44;
 const BAR_BOTTOM = 48;
 
-const AGV_SIZE   = 30;
-const TROLLEY_W  = 28;
-const TROLLEY_H  = 18;
+const AGV_SIZE    = 30;
+const TROLLEY_LEN = 56;   // along the heading (~2× the old length)
+const TROLLEY_WID = 22;   // across
 
-const ACTION_COLORS = {
-  pickup:   '#50DC78',
-  release:  '#F4A261',
-  exchange: '#50C8FF',
+// Colours for the load-setting action indicator at a stop.
+const LOAD_COLORS = {
+  none:  '#9aa0a8',
+  empty: '#F4A261',
+  full:  '#c0392b',
 };
 
 // ── Application state ─────────────────────────────────────────────────────
@@ -53,8 +54,7 @@ function makeWalker(agvDef) {
     currentStep:  0,
     agvPos:       { x: 0, y: 0 },
     agvHeading:   0,
-    trolleyState: 'empty',
-    trolleyPos:   null,
+    load:         'none',   // 'none' | 'empty' | 'full' — towed-trolley state
     phase:        'idle',   // 'idle' | 'action_pause' | 'moving' | 'done' | 'parked'
     actionTimer:  0,
     currentNode:  null,     // node id the AGV is at / holding a reservation on
@@ -76,29 +76,12 @@ function routeWalkerToStep(w) {
 
 function actionDurationFor(seqE) {
   if (seqE.dwell !== undefined) return seqE.dwell;
-  const action = seqE.action;
-  if (action === 'move')     return 0;
-  if (action === 'exchange') return state.actionDuration * 2;
-  return state.actionDuration;
+  return seqE.action === 'move' ? 0 : state.actionDuration;
 }
 
 function applyActionEffect(action, nodePos, w) {
-  switch (action) {
-    case 'pickup':
-      w.trolleyState = 'carrying';
-      w.trolleyPos   = null;
-      break;
-    case 'release':
-      w.trolleyState = 'empty';
-      w.trolleyPos   = { x: nodePos.x, y: nodePos.y, heading: w.agvHeading };
-      break;
-    case 'exchange':
-      w.trolleyPos   = { x: nodePos.x, y: nodePos.y, heading: w.agvHeading };
-      w.trolleyState = 'carrying';
-      break;
-    default:
-      break;
-  }
+  // A stop sets the AGV's towed-trolley load; 'move' is a pass-through.
+  if (action === 'none' || action === 'empty' || action === 'full') w.load = action;
 }
 
 function resetWalker(w) {
@@ -110,8 +93,7 @@ function resetWalker(w) {
   w.currentStep    = 0;
   w.agvPos         = { x: startPt.x, y: startPt.y };
   w.agvHeading     = w.sequence[0]?.heading ?? 0;
-  w.trolleyState   = 'empty';
-  w.trolleyPos     = null;
+  w.load           = 'none';
   w.phase          = 'action_pause';
   w.actionTimer    = 0;
   w.currentNode    = startNodeId;
@@ -260,7 +242,7 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
       Dispatch.init(layout);
       document.getElementById('loadStatus').textContent =
         `${file.name} — ${Object.keys(state.nodes).length} stations · ${state.agvs.length} AGV(s) · ` +
-        `${Dispatch.groupIds().length} groups · ${Dispatch.callStations().length} call points`;
+        `${Dispatch.groupIds().length} groups · ${Dispatch.calls().length} call points`;
       state.playing = false;
       updatePlayButton();
       buildDispatchUI();
@@ -359,10 +341,8 @@ function buildDispatchUI() {
 
 // Fire the group of whatever call marker is under the given screen point.
 function callMarkerAt(sx, sy) {
-  for (const c of Dispatch.callStations()) {
-    const st = state.nodes[c.station];
-    if (!st) continue;
-    const { sx: mx, sy: my } = imgToScreen(st.x, st.y, state.view);
+  for (const c of Dispatch.calls()) {
+    const { sx: mx, sy: my } = imgToScreen(c.x, c.y, state.view);
     if (Math.hypot(sx - mx, sy - my) <= AGV_SIZE / 2 + 6) return c;
   }
   return null;
@@ -544,8 +524,9 @@ function drawRoundRect(x, y, w, h, r, fill, stroke) {
 }
 
 function drawActionIndicator(sx, sy, action, progress, label) {
-  const col = ACTION_COLORS[action];
+  const col = LOAD_COLORS[action];
   if (!col) return;
+  const text = action === 'none' ? 'DROP' : action.toUpperCase();   // none/empty/full
 
   const startAngle = -Math.PI / 2;
   const endAngle   = startAngle + 2 * Math.PI * Math.min(progress, 1);
@@ -560,7 +541,7 @@ function drawActionIndicator(sx, sy, action, progress, label) {
   ctx.font         = 'bold 11px monospace';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'bottom';
-  ctx.fillText(action.toUpperCase(), sx, sy - AGV_SIZE / 2 - 14);
+  ctx.fillText(text, sx, sy - AGV_SIZE / 2 - 14);
 
   if (label) {
     ctx.font      = '10px monospace';
@@ -619,23 +600,39 @@ function drawPerson(sx, sy, heading) {
   ctx.restore();
 }
 
-function drawTrolley(sx, sy, heading, attached) {
-  const w = attached ? 22 : TROLLEY_W;
-  const h = attached ? 14 : TROLLEY_H;
+// Draw the towed trolley by load: 'empty' = light/hollow, 'full' = solid + cargo box.
+function drawTrolley(sx, sy, heading, load) {
+  if (load === 'none') return;
+  const w = TROLLEY_LEN, h = TROLLEY_WID;
   ctx.save();
   ctx.translate(sx, sy);
   ctx.rotate(heading * Math.PI / 180);
+
   ctx.beginPath();
-  ctx.roundRect(-w / 2, -h / 2, w, h, 3);
-  ctx.fillStyle   = '#F4A261';
+  ctx.roundRect(-w / 2, -h / 2, w, h, 4);
+  ctx.fillStyle   = load === 'full' ? '#F4A261' : '#fdf0df';   // solid amber vs light
   ctx.fill();
   ctx.strokeStyle = '#c07830';
-  ctx.lineWidth   = 2;
+  ctx.lineWidth   = 2.5;
   ctx.stroke();
-  for (const s of [-1, 1]) {
+
+  if (load === 'full') {
+    // cargo box on top so a loaded trolley clearly differs from an empty one
+    const cw = w * 0.55, ch = h * 0.6;
     ctx.beginPath();
-    ctx.arc(s * (w / 2 - 4), h / 2 - 2, 2, 0, Math.PI * 2);
-    ctx.fillStyle = '#804820';
+    ctx.roundRect(-cw / 2, -ch / 2, cw, ch, 2);
+    ctx.fillStyle   = '#9c4a1e';
+    ctx.fill();
+    ctx.strokeStyle = '#5e2c10';
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+  }
+
+  // wheels at the four corners
+  for (const sgn of [-1, 1]) for (const e of [-1, 1]) {
+    ctx.beginPath();
+    ctx.arc(e * (w / 2 - 6), sgn * (h / 2 - 2), 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#5b3415';
     ctx.fill();
   }
   ctx.restore();
@@ -702,12 +699,11 @@ function drawScene(timestamp) {
   state.agvs.forEach(agv => {
     const seq = agv.sequence.filter(e => nodePos(e.node));
     if (seq.length < 2) return;
-    let carrying = false;
+    let load = 'none';
     for (let i = 0; i < seq.length - 1; i++) {
       const a = seq[i].action;
-      if (a === 'pickup')   carrying = true;
-      if (a === 'release')  carrying = false;
-      if (a === 'exchange') carrying = true;
+      if (a === 'none' || a === 'empty' || a === 'full') load = a;   // a stop sets the load
+      const carrying = load !== 'none';
       const ptA = nodePos(seq[i].node);
       const ptB = nodePos(seq[i + 1].node);
       const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
@@ -756,12 +752,10 @@ function drawScene(timestamp) {
     }
   }
 
-  // ── Call markers (clickable) ─────────────────────────────────────────────
+  // ── Call markers (clickable, free-floating) ──────────────────────────────
   const pending = Dispatch.isActive() ? Dispatch.pendingByGroup() : {};
-  Dispatch.callStations().forEach(c => {
-    const st = state.nodes[c.station];
-    if (!st) return;
-    const { sx, sy } = imgToScreen(st.x, st.y, state.view);
+  Dispatch.calls().forEach(c => {
+    const { sx, sy } = imgToScreen(c.x, c.y, state.view);
     const r     = AGV_SIZE / 2 + 6;
     const pulse = 0.45 + 0.55 * Math.abs(Math.sin(state.elapsed * 3));
     ctx.beginPath();
@@ -780,14 +774,6 @@ function drawScene(timestamp) {
 
   const conflicts = detectConflicts();
 
-  // Detached trolleys (all AGVs — drawn before AGV bodies)
-  state.agvs.forEach(agv => {
-    if (agv.trolleyState === 'empty' && agv.trolleyPos) {
-      const { sx, sy } = imgToScreen(agv.trolleyPos.x, agv.trolleyPos.y, state.view);
-      drawTrolley(sx, sy, agv.trolleyPos.heading ?? 0, false);
-    }
-  });
-
   // Each AGV body, hitch, conflict ring, action indicator
   state.agvs.forEach((agv, idx) => {
     // Skip only truly-idle AGVs. Dispatch AGVs waiting at home are 'parked'
@@ -797,8 +783,8 @@ function drawScene(timestamp) {
     const { sx: ax, sy: ay } = imgToScreen(agv.agvPos.x, agv.agvPos.y, state.view);
     const rad = agv.agvHeading * Math.PI / 180;
 
-    if (agv.trolleyState === 'carrying') {
-      const HITCH = AGV_SIZE / 2 + 6 + 7;
+    if (agv.load !== 'none') {
+      const HITCH = AGV_SIZE / 2 + 8 + TROLLEY_LEN / 2;   // clear the bigger trolley
       const tx = ax - HITCH * Math.cos(rad);
       const ty = ay - HITCH * Math.sin(rad);
 
@@ -816,7 +802,7 @@ function drawScene(timestamp) {
       ctx.fill();
       ctx.restore();
 
-      drawTrolley(tx, ty, agv.agvHeading, true);
+      drawTrolley(tx, ty, agv.agvHeading, agv.load);
     }
 
     drawAGV(ax, ay, agv.agvHeading, agv.color);

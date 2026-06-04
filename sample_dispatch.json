@@ -32,29 +32,29 @@
     { "id": "AGV-03", "color": "#1a9c50" }
   ],
   "GROUPS": {
-    "G-A": { "name": "Serve A", "stops": [
+    "G-A": { "name": "Deliver to A", "homeStart": "full", "homeEnd": null, "stops": [
       { "node": "P-H", "action": "move" }, { "node": "P-4", "action": "move" },
-      { "node": "LA", "action": "exchange" },
+      { "node": "LA", "action": "none" },
       { "node": "P-4", "action": "move" }, { "node": "P-H", "action": "move" } ] },
-    "G-B": { "name": "Serve B", "stops": [
+    "G-B": { "name": "Collect from B", "homeStart": null, "homeEnd": "none", "stops": [
       { "node": "P-H", "action": "move" }, { "node": "P-5", "action": "move" },
-      { "node": "LB", "action": "exchange" },
+      { "node": "LB", "action": "full" },
       { "node": "P-5", "action": "move" }, { "node": "P-H", "action": "move" } ] },
-    "G-C": { "name": "Serve C", "stops": [
+    "G-C": { "name": "Collect from C", "homeStart": null, "homeEnd": "none", "stops": [
       { "node": "P-H", "action": "move" }, { "node": "P-6", "action": "move" },
-      { "node": "LC", "action": "exchange" },
+      { "node": "LC", "action": "full" },
       { "node": "P-6", "action": "move" }, { "node": "P-H", "action": "move" } ] },
-    "G-AB": { "name": "A pick, B drop", "stops": [
+    "G-AB": { "name": "A→B relay", "homeStart": "full", "homeEnd": "none", "stops": [
       { "node": "P-H", "action": "move" }, { "node": "P-4", "action": "move" },
-      { "node": "LA", "action": "pickup" },
+      { "node": "LA", "action": "none" },
       { "node": "P-4", "action": "move" }, { "node": "P-H", "action": "move" },
-      { "node": "P-5", "action": "move" }, { "node": "LB", "action": "release" },
+      { "node": "P-5", "action": "move" }, { "node": "LB", "action": "full" },
       { "node": "P-5", "action": "move" }, { "node": "P-H", "action": "move" } ] }
   },
-  "CALL_STATIONS": [
-    { "station": "LA", "group": "G-A" },
-    { "station": "LB", "group": "G-B" },
-    { "station": "LC", "group": "G-C" }
+  "CALLS": [
+    { "x": 852, "y": 130, "group": "G-A" },
+    { "x": 904, "y": 300, "group": "G-B" },
+    { "x": 852, "y": 470, "group": "G-C" }
   ],
   "HOME": { "slots": ["HS-1", "HS-2", "HS-3"] },
   "SIM": {

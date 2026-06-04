@@ -74,23 +74,25 @@
   <div id="groupBar">
     <span id="groupBarLabel" class="details-label">No active group</span>
     <div class="details-sep"></div>
-    <span class="details-hint">Pick a group at right, then click stations in order · RClick=undo last stop</span>
+    <button class="track-seg-btn" id="homeStartBtn">+ Home-start</button>
+    <button class="track-seg-btn" id="homeEndBtn">+ Home-end</button>
+    <div class="details-sep"></div>
+    <span class="details-hint">Click nodes in order (corner=pass, station=set load) · RClick=undo last</span>
   </div>
 
   <!-- Call mode hint bar -->
   <div id="callBar">
     <span class="details-label">Call points</span>
     <div class="details-sep"></div>
-    <span class="details-hint">Click a station → choose a group · RClick a station = remove its call</span>
+    <span class="details-hint">Click anywhere → choose a group · RClick a marker = remove it</span>
   </div>
 
-  <!-- Action picker (GROUP mode: choose action at a stop) -->
+  <!-- Load picker (GROUP/home: set the AGV's towed-trolley load) -->
   <div id="actionPicker">
-    <div class="picker-label">Action at this stop</div>
-    <button data-action="move">move — pass through</button>
-    <button data-action="pickup">pickup — attach trolley</button>
-    <button data-action="release">release — detach trolley</button>
-    <button data-action="exchange">exchange — swap trolley</button>
+    <div class="picker-label">Set trolley load</div>
+    <button data-action="full">full — loaded trolley</button>
+    <button data-action="empty">empty — empty trolley</button>
+    <button data-action="none">none — no trolley (drop)</button>
   </div>
 
   <!-- Group picker (CALL mode: choose which group a call fires) -->
