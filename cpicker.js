@@ -35,6 +35,7 @@ const state = {
 
   // PATH editing
   pathSel: null, pathArc: false, pathR: 120, pathCW: true, pathPtN: 1, edgeN: 1,
+  pathHistory: [],   // LIFO of {node?,edge?,prevSel} so right-click undoes a whole placement
   // STATION editing
   placeRole: 'action', stationN: 1, homeN: 1,
   // counters
@@ -118,7 +119,7 @@ $('confirmClearOk').addEventListener('click', () => {
   state.sim = { agvSpeed: 120, serviceTime: 3, requests: [],
                 autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
-  state.pathSel = null; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.groupN = 0;
+  state.pathSel = null; state.pathHistory = []; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.groupN = 0;
   state.mode = 'PATH';
   loadJsonInput.value = ''; loadImgInput.value = '';
   filenameInput.value = 'coords.json'; state.outputFilename = 'coords.json';
@@ -156,6 +157,7 @@ function loadIntoState(data) {
     autoGenerate: { enabled: !!ag.enabled, meanInterval: ag.meanInterval || 6, seed: ag.seed ?? 1234 },
   };
   state.activeGroup = Object.keys(state.groups)[0] || null;
+  state.pathSel = null; state.pathHistory = [];   // loaded geometry has no undo history
   syncCounters();
 }
 
@@ -287,30 +289,45 @@ canvas.addEventListener('contextmenu', (e) => {
 function onClickPath(sx, sy) {
   const hit = hitCorner(sx, sy);
   if (hit) {
-    if (state.pathSel && state.pathSel !== hit) { connectCorners(state.pathSel, hit); state.pathSel = hit; }
-    else state.pathSel = hit;
+    // Clicking an existing corner: connect from the selected one, else just select.
+    if (state.pathSel && state.pathSel !== hit) {
+      const e = connectCorners(state.pathSel, hit);
+      if (e) state.pathHistory.push({ edge: e, prevSel: state.pathSel });
+      state.pathSel = hit;
+    } else {
+      state.pathSel = hit;   // pure selection — not an undoable geometry change
+    }
     return;
   }
+  // Placing a new corner is ONE action: the node + (if chaining) its edge.
+  const prevSel = state.pathSel;
   const { ix, iy } = toImg(sx, sy);
   const id = nextCornerId();
   state.path.nodes[id] = { x: Math.round(ix), y: Math.round(iy) };
-  if (state.pathSel) connectCorners(state.pathSel, id);
+  const e = prevSel ? connectCorners(prevSel, id) : null;
+  state.pathHistory.push({ node: id, edge: e, prevSel });
   state.pathSel = id;
   updatePathBar();
 }
 function connectCorners(a, b) {
-  if (a === b) return;
-  if (state.path.edges.some(s => (s.from === a && s.to === b) || (s.from === b && s.to === a))) return;
+  if (a === b) return null;
+  if (state.path.edges.some(s => (s.from === a && s.to === b) || (s.from === b && s.to === a))) return null;
   const edge = { id: nextEdgeId(), from: a, to: b, type: state.pathArc ? 'arc' : 'straight' };
   if (state.pathArc) { edge.radius = state.pathR; edge.clockwise = state.pathCW; }
   state.path.edges.push(edge);
   updatePathBar();
+  return edge.id;
 }
+// One right-click reverses the last placement: removes the node AND its edge
+// together (no orphan corners), and restores the previous selection so you can
+// keep chaining. Use Esc to merely deselect.
 function undoPath() {
-  if (state.pathSel) { state.pathSel = null; return; }
-  if (state.path.edges.length) { state.path.edges.pop(); updatePathBar(); return; }
-  const ids = Object.keys(state.path.nodes);
-  if (ids.length) { delete state.path.nodes[ids[ids.length - 1]]; updatePathBar(); }
+  const h = state.pathHistory.pop();
+  if (!h) { state.pathSel = null; return; }
+  if (h.edge) { const i = state.path.edges.findIndex(e => e.id === h.edge); if (i >= 0) state.path.edges.splice(i, 1); }
+  if (h.node) delete state.path.nodes[h.node];
+  state.pathSel = (h.prevSel && state.path.nodes[h.prevSel]) ? h.prevSel : null;
+  updatePathBar();
 }
 function updatePathBar() {
   $('pathStraightBtn').classList.toggle('active', !state.pathArc);
