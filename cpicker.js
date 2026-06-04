@@ -24,6 +24,13 @@ const state = {
   bgImage:       null,
   imgW: 0, imgH: 0,
   outputFilename: 'coords.json',
+  dispatch: {
+    enabled:      false,
+    homeSlots:    [],      // ordered seq_point node ids — one parking spot per AGV
+    lines:        [],      // { id, node, serviceAction, serviceTime }
+    requests:     [],      // { t, line, agv }
+    autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 },
+  },
   mouseScreen: { sx: 0, sy: 0 },
   mouseImg:    { ix: 0, iy: 0 },
   isPanning:        false,
@@ -152,10 +159,17 @@ loadJsonInput.addEventListener('change', (e) => {
         const n = parseInt(id.replace('TP-', ''), 10);
         if (!isNaN(n) && n >= state.trackPtN) state.trackPtN = n + 1;
       }
+      const nd = normaliseDispatch(data);
+      state.dispatch = nd
+        ? { enabled: true, homeSlots: nd.homeSlots, lines: nd.lines,
+            requests: nd.requests, autoGenerate: nd.autoGenerate }
+        : { enabled: false, homeSlots: [], lines: [], requests: [],
+            autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
       updateAgvPanel();
       updateSeqPanel();
       updateNodeList();
       updateTrackBar();
+      updateDispatchPanel();
     } catch { alert('Invalid JSON.'); }
   };
   reader.readAsText(file);
@@ -173,6 +187,7 @@ document.getElementById('startBtn').addEventListener('click', () => {
   updateSeqPanel();
   updateNodeList();
   updateTrackBar();
+  updateDispatchPanel();
   requestAnimationFrame(drawLoop);
 });
 
@@ -194,11 +209,13 @@ document.getElementById('confirmClearOk').addEventListener('click', () => {
   state.trackLastSeg = null;
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
   state.mode = 'NODE'; state.hoveredNode = null; state.actionPickerNode = null;
+  state.dispatch = { enabled: false, homeSlots: [], lines: [], requests: [],
+    autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
   loadJsonInput.value = ''; loadImgInput.value = '';
   filenameInput.value = 'coords.json'; state.outputFilename = 'coords.json';
   closeRadial(); hideActionPicker(); hideDetailsBar();
   updateAgvPanel(); updateSeqPanel(); updateNodeList(); updateModeBadge();
-  updateTrackBar();
+  updateTrackBar(); updateDispatchPanel();
   hudFile.textContent = '→ coords.json';
   startupModal.showModal();
 });
@@ -838,6 +855,136 @@ function updateModeBadge() {
   modeBadge.className   = classes[state.mode] || 'node-mode';
 }
 
+// ── Dispatch authoring ─────────────────────────────────────────────────────
+
+function nodeDispatchRole(id) {
+  if (state.dispatch.homeSlots.includes(id))           return 'home';
+  if (state.dispatch.lines.some(l => l.node === id))   return 'line';
+  return 'none';
+}
+
+function nextLineId() {
+  const used = new Set(state.dispatch.lines.map(l => l.id));
+  for (let i = 0; i < 26; i++) {
+    const id = 'LINE-' + String.fromCharCode(65 + i);
+    if (!used.has(id)) return id;
+  }
+  return 'LINE-' + (state.dispatch.lines.length + 1);
+}
+
+function setNodeDispatchRole(id, role) {
+  state.dispatch.homeSlots = state.dispatch.homeSlots.filter(x => x !== id);
+  state.dispatch.lines     = state.dispatch.lines.filter(l => l.node !== id);
+  if (role === 'home') {
+    state.dispatch.homeSlots.push(id);
+  } else if (role === 'line') {
+    state.dispatch.lines.push({ id: nextLineId(), node: id, serviceAction: 'exchange', serviceTime: 3 });
+  }
+  updateDispatchPanel();
+}
+
+function parseRequestsText(txt) {
+  return txt.split('\n').map(s => s.trim()).filter(Boolean).map(s => {
+    const p = s.split(/[\s,]+/);
+    return { t: parseFloat(p[0]) || 0, line: p[1], agv: p[2] || null };
+  }).filter(r => r.line);
+}
+
+function updateDispatchPanel() {
+  const panel = document.getElementById('dispatchPanel');
+  const body  = document.getElementById('dispatchBody');
+  if (!panel || !body) return;
+  panel.style.display = 'block';
+  body.innerHTML = '';
+
+  // Enable toggle
+  const head = document.createElement('label');
+  head.className = 'dispatch-enable';
+  const en = document.createElement('input');
+  en.type = 'checkbox';
+  en.checked = state.dispatch.enabled;
+  en.addEventListener('change', () => { state.dispatch.enabled = en.checked; updateDispatchPanel(); });
+  head.appendChild(en);
+  head.appendChild(document.createTextNode(' Enable dispatch mode'));
+  body.appendChild(head);
+  if (!state.dispatch.enabled) return;
+
+  // Per seq_point role assignment
+  const seqIds = Object.keys(state.nodes).filter(id => state.nodes[id].type === 'seq_point');
+  seqIds.forEach(id => {
+    const row = document.createElement('div');
+    row.className = 'dispatch-row';
+    const role = nodeDispatchRole(id);
+    const slotIdx = state.dispatch.homeSlots.indexOf(id);
+    const tag = role === 'home' ? ` [slot ${slotIdx + 1}]`
+              : role === 'line' ? ` [${state.dispatch.lines.find(l => l.node === id).id}]` : '';
+
+    const name = document.createElement('span');
+    name.className = 'dispatch-name';
+    name.textContent = id + tag;
+    row.appendChild(name);
+
+    const sel = document.createElement('select');
+    ['none', 'home', 'line'].forEach(r => {
+      const o = document.createElement('option');
+      o.value = r; o.textContent = r; if (r === role) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => setNodeDispatchRole(id, sel.value));
+    row.appendChild(sel);
+
+    if (role === 'line') {
+      const line = state.dispatch.lines.find(l => l.node === id);
+      const st = document.createElement('input');
+      st.type = 'number'; st.min = '0'; st.step = '0.5'; st.value = line.serviceTime;
+      st.title = 'service time (s)'; st.className = 'dispatch-st';
+      st.addEventListener('change', () => { line.serviceTime = parseFloat(st.value) || 0; });
+      st.addEventListener('keydown', e => e.stopPropagation());
+      row.appendChild(st);
+    }
+    body.appendChild(row);
+  });
+
+  // Requests timeline
+  const reqLbl = document.createElement('div');
+  reqLbl.className = 'dispatch-sub';
+  reqLbl.textContent = 'Requests  (t  LINE-X  [AGV-0N])';
+  body.appendChild(reqLbl);
+  const ta = document.createElement('textarea');
+  ta.className = 'dispatch-ta';
+  ta.rows = 4;
+  ta.value = state.dispatch.requests.map(r => `${r.t} ${r.line}${r.agv ? ' ' + r.agv : ''}`).join('\n');
+  ta.placeholder = '1 LINE-A\n2 LINE-B AGV-01';
+  ta.addEventListener('change', () => { state.dispatch.requests = parseRequestsText(ta.value); });
+  ta.addEventListener('keydown', e => e.stopPropagation());
+  body.appendChild(ta);
+
+  // Auto-generate
+  const ag = state.dispatch.autoGenerate;
+  const agRow = document.createElement('label');
+  agRow.className = 'dispatch-enable';
+  const agc = document.createElement('input');
+  agc.type = 'checkbox'; agc.checked = ag.enabled;
+  agc.addEventListener('change', () => { ag.enabled = agc.checked; });
+  agRow.appendChild(agc);
+  agRow.appendChild(document.createTextNode(' Auto-generate (seed/interval)'));
+  body.appendChild(agRow);
+
+  const agParams = document.createElement('div');
+  agParams.className = 'dispatch-row';
+  const iv = document.createElement('input');
+  iv.type = 'number'; iv.min = '1'; iv.step = '1'; iv.value = ag.meanInterval; iv.title = 'mean interval (s)'; iv.className = 'dispatch-st';
+  iv.addEventListener('change', () => { ag.meanInterval = parseFloat(iv.value) || 6; });
+  iv.addEventListener('keydown', e => e.stopPropagation());
+  const sd = document.createElement('input');
+  sd.type = 'number'; sd.step = '1'; sd.value = ag.seed; sd.title = 'seed'; sd.className = 'dispatch-st';
+  sd.addEventListener('change', () => { ag.seed = parseInt(sd.value, 10) || 0; });
+  sd.addEventListener('keydown', e => e.stopPropagation());
+  agParams.appendChild(iv);
+  agParams.appendChild(sd);
+  body.appendChild(agParams);
+}
+
 // ── Track helpers ─────────────────────────────────────────────────────────
 
 function findTrackPtAt(sx, sy) {
@@ -910,6 +1057,17 @@ function saveJSON() {
   if (state.agvs.length === 1) data.SEQUENCE = state.agvs[0].sequence;
   if (state.track.segments.length > 0 || Object.keys(state.track.points).length > 0)
     data.TRACK = state.track;
+  if (state.dispatch.enabled) {
+    const d = state.dispatch;
+    data.DISPATCH = {
+      home:         d.homeSlots[0] || null,
+      homeSlots:    d.homeSlots.slice(),
+      lines:        d.lines.map(l => ({ id: l.id, node: l.node,
+                      serviceAction: l.serviceAction, serviceTime: l.serviceTime })),
+      requests:     d.requests.slice(),
+      autoGenerate: { ...d.autoGenerate },
+    };
+  }
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a    = document.createElement('a');
   a.href     = URL.createObjectURL(blob);

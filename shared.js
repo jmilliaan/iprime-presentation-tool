@@ -283,3 +283,56 @@ function normaliseAGVS(data) {
   }
   return [];
 }
+
+// ── Deterministic RNG (LCG, Numerical Recipes) ────────────────────────────
+// Returns a function producing floats in [0,1).  Seeded → reproducible runs,
+// which is what makes a recorded dispatch video identical every time.
+
+function makeRng(seed) {
+  let s = (seed >>> 0) || 1;
+  return function () {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+// ── Dispatch normalisation ────────────────────────────────────────────────
+// Parses the optional top-level DISPATCH block.  Returns null when absent so
+// the player stays in the legacy scripted-sequence mode.
+//   home       — node id of the dispatch base (fallback parking spot)
+//   homeSlots  — ordered node ids, one parking spot per AGV (recommended for
+//                multi-AGV so they don't contend for the same track point)
+//   lines      — service points that can request an AGV
+//   requests   — deterministic timeline { t, line, agv? } for repeatable video
+//   autoGenerate — seeded random on-demand request generator
+
+function normaliseDispatch(data) {
+  const d = data.DISPATCH;
+  if (!d) return null;
+
+  const lines = (d.lines || []).map((l, i) => ({
+    id:            l.id || `LINE-${String.fromCharCode(65 + i)}`,
+    node:          l.node,
+    serviceAction: ['move', 'pickup', 'release', 'exchange'].includes(l.serviceAction)
+      ? l.serviceAction : 'exchange',
+    serviceTime:   typeof l.serviceTime === 'number' ? l.serviceTime : 3,
+  })).filter(l => l.node);
+
+  const requests = (d.requests || [])
+    .map(r => ({ t: +r.t || 0, line: r.line, agv: r.agv || null }))
+    .filter(r => r.line)
+    .sort((a, b) => a.t - b.t);
+
+  const ag = d.autoGenerate || {};
+  return {
+    home:      d.home || null,
+    homeSlots: Array.isArray(d.homeSlots) ? d.homeSlots.slice() : [],
+    lines,
+    requests,
+    autoGenerate: {
+      enabled:      !!ag.enabled,
+      meanInterval: typeof ag.meanInterval === 'number' && ag.meanInterval > 0 ? ag.meanInterval : 6,
+      seed:         typeof ag.seed === 'number' ? ag.seed : 1234,
+    },
+  };
+}

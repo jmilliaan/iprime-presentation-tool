@@ -55,12 +55,34 @@ function makeWalker(agvDef) {
     agvHeading:     0,
     trolleyState:   'empty',
     trolleyPos:     null,
-    phase:          'idle',
+    phase:          'idle',   // 'idle' | 'action_pause' | 'moving' | 'done' | 'parked'
     actionTimer:    0,
     trackPath:      [],   // track point IDs to follow to next sequence node
     trackPathIdx:   0,
     currentTrackPt: null,
+    job:            null, // dispatch mode: current line id being served, or null
+    homeSlot:       null, // dispatch mode: node id of this AGV's parking spot
+    waiting:        false,// dispatch mode: held by a track reservation ahead
   };
+}
+
+// Set up track routing for a walker to move from its current track point toward
+// w.sequence[w.currentStep], then switch it into the 'moving' phase. Shared by
+// the action_pause→moving transition and by the dispatch engine when it hands a
+// walker a fresh job.
+function routeWalkerToStep(w) {
+  const nextNode = state.nodes[w.sequence[w.currentStep]?.node];
+  const fromTP   = w.currentTrackPt;
+  const toTP     = nextNode?.trackPoint || null;
+  if (fromTP && toTP && state.track.segments.length > 0) {
+    const route = routeOnTrack(fromTP, toTP);
+    w.trackPath = route ? route.slice(1) : [];
+  } else {
+    w.trackPath = [];
+  }
+  w.trackPathIdx = 0;
+  w.phase        = 'moving';
+  w.actionTimer  = 0;
 }
 
 function actionDurationFor(seqE) {
@@ -106,15 +128,18 @@ function resetWalker(w) {
   w.trackPath      = [];
   w.trackPathIdx   = 0;
   w.currentTrackPt = startPt.trackPoint || null;
+  w.job            = null;
+  w.waiting        = false;
 }
 
 function resetAllWalkers() {
+  if (Dispatch.isActive()) { Dispatch.reset(); state.elapsed = 0; return; }
   state.agvs.forEach(w => resetWalker(w));
   state.elapsed = 0;
 }
 
 function updateWalker(w, dt) {
-  if (w.phase === 'idle' || w.phase === 'done') return;
+  if (w.phase === 'idle' || w.phase === 'done' || w.phase === 'parked') return;
 
   if (w.phase === 'action_pause') {
     const seqE     = w.sequence[w.currentStep];
@@ -131,19 +156,8 @@ function updateWalker(w, dt) {
 
       // Initialise track routing for this move segment
       const prevNode = state.nodes[w.sequence[w.currentStep - 1].node];
-      const nextNode = state.nodes[w.sequence[w.currentStep].node];
-      const fromTP   = prevNode?.trackPoint || null;
-      const toTP     = nextNode?.trackPoint || null;
-      w.currentTrackPt = fromTP;
-      if (fromTP && toTP && state.track.segments.length > 0) {
-        const route   = routeOnTrack(fromTP, toTP);
-        w.trackPath   = route ? route.slice(1) : [];
-      } else {
-        w.trackPath = [];
-      }
-      w.trackPathIdx = 0;
-      w.phase        = 'moving';
-      w.actionTimer  = 0;
+      w.currentTrackPt = prevNode?.trackPoint || w.currentTrackPt;
+      routeWalkerToStep(w);
     }
     return;
   }
@@ -154,8 +168,17 @@ function updateWalker(w, dt) {
 
     // Determine immediate sub-target: next track point or final node
     const hasTrackWaypoint = w.trackPath.length > 0 && w.trackPathIdx < w.trackPath.length;
+    const nextTpId    = hasTrackWaypoint ? w.trackPath[w.trackPathIdx] : null;
+
+    // Real queueing: in dispatch mode an AGV must reserve the next track point
+    // before entering it. If another AGV holds it, hold position and wait.
+    if (Dispatch.isActive() && nextTpId) {
+      if (!Dispatch.tryReserve(nextTpId, w.id)) { w.waiting = true; return; }
+    }
+    w.waiting = false;
+
     const movingToPos = hasTrackWaypoint
-      ? state.track.points[w.trackPath[w.trackPathIdx]]
+      ? state.track.points[nextTpId]
       : targetNode;
     if (!movingToPos) { w.phase = 'done'; return; }
 
@@ -179,12 +202,15 @@ function updateWalker(w, dt) {
     if (result.targetIdx >= path.length) {
       w.agvPos = { x: movingToPos.x, y: movingToPos.y };
       if (hasTrackWaypoint) {
-        w.currentTrackPt = w.trackPath[w.trackPathIdx];
+        // Reached the next track point: release the one behind, keep this one.
+        if (Dispatch.isActive()) Dispatch.release(w.currentTrackPt, w.id);
+        w.currentTrackPt = nextTpId;
         w.trackPathIdx++;
       } else {
         // Arrived at destination node
         const entryHeading = w.sequence[w.currentStep]?.heading;
         if (entryHeading !== undefined) w.agvHeading = entryHeading;
+        if (targetNode.trackPoint) w.currentTrackPt = targetNode.trackPoint;
         w.phase       = 'action_pause';
         w.actionTimer = 0;
       }
@@ -194,7 +220,7 @@ function updateWalker(w, dt) {
 
 function updateAllWalkers(dt) {
   state.agvs.forEach(w => {
-    if (w.phase !== 'idle' && w.phase !== 'done') updateWalker(w, dt);
+    if (w.phase !== 'idle' && w.phase !== 'done' && w.phase !== 'parked') updateWalker(w, dt);
   });
 }
 
@@ -209,10 +235,10 @@ function detectConflicts() {
   const conflicting = new Set();
   for (let i = 0; i < state.agvs.length; i++) {
     const wi = state.agvs[i];
-    if (wi.phase === 'idle' || wi.phase === 'done') continue;
+    if (wi.phase === 'idle' || wi.phase === 'done' || wi.phase === 'parked') continue;
     for (let j = i + 1; j < state.agvs.length; j++) {
       const wj = state.agvs[j];
-      if (wj.phase === 'idle' || wj.phase === 'done') continue;
+      if (wj.phase === 'idle' || wj.phase === 'done' || wj.phase === 'parked') continue;
 
       const niId = wi.sequence[wi.currentStep]?.node;
       const njId = wj.sequence[wj.currentStep]?.node;
@@ -298,11 +324,14 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
       state.agvs  = normaliseAGVS(data).map(agvDef => makeWalker(agvDef));
       if (state.agvs.length === 0)
         state.agvs = [makeWalker({ id: 'AGV-01', color: AGV_COLORS[0], sequence: [] })];
+      const isDispatch = Dispatch.init(data);
       const totalSteps = state.agvs.reduce((s, w) => s + w.sequence.length, 0);
-      document.getElementById('loadStatus').textContent =
-        `${file.name} — ${Object.keys(state.nodes).length} nodes · ${state.agvs.length} AGV(s) · ${totalSteps} steps`;
+      document.getElementById('loadStatus').textContent = isDispatch
+        ? `${file.name} — ${Object.keys(state.nodes).length} nodes · ${state.agvs.length} AGV(s) · ${Dispatch.lineIds().length} lines · DISPATCH`
+        : `${file.name} — ${Object.keys(state.nodes).length} nodes · ${state.agvs.length} AGV(s) · ${totalSteps} steps`;
       state.playing = false;
       updatePlayButton();
+      buildDispatchControls();
       resetAllWalkers();
       updateStatusBadge();
       updateStepCounter();
@@ -355,6 +384,11 @@ function updateStatusBadge() {
 }
 
 function updateStepCounter() {
+  if (Dispatch.isActive()) {
+    const home = state.agvs.filter(w => w.phase === 'parked').length;
+    stepCounter.textContent = `queue ${Dispatch.queueLength()} · ${home}/${state.agvs.length} home`;
+    return;
+  }
   if (state.agvs.length === 1) {
     const w = state.agvs[0];
     stepCounter.textContent = `step ${w.currentStep} / ${w.sequence.length}`;
@@ -364,9 +398,47 @@ function updateStepCounter() {
   }
 }
 
+// Build the per-line "Call" buttons + auto-generate toggle from the loaded
+// dispatch layout. Hidden entirely in scripted mode.
+function buildDispatchControls() {
+  const wrap = document.getElementById('dispatchControls');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!Dispatch.isActive()) { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'flex';
+
+  const label = document.createElement('label');
+  label.textContent = 'Call';
+  wrap.appendChild(label);
+
+  Dispatch.lineIds().forEach(id => {
+    const btn = document.createElement('button');
+    btn.textContent = id;
+    btn.className   = 'call-btn';
+    btn.addEventListener('click', () => {
+      Dispatch.enqueue({ line: id });
+      if (!state.playing) { state.playing = true; updatePlayButton(); }
+    });
+    wrap.appendChild(btn);
+  });
+
+  const autoWrap = document.createElement('label');
+  autoWrap.style.marginLeft = '6px';
+  const auto = document.createElement('input');
+  auto.type    = 'checkbox';
+  auto.checked = dispatch.autoGenerate.enabled;
+  auto.addEventListener('change', (e) => {
+    dispatch.autoGenerate.enabled = e.target.checked;
+    if (e.target.checked) dispatch.nextGenTime = Dispatch._nextInterval();
+  });
+  autoWrap.appendChild(auto);
+  autoWrap.appendChild(document.createTextNode(' Auto'));
+  wrap.appendChild(autoWrap);
+}
+
 btnPlayPause.addEventListener('click', () => {
-  if (state.agvs.every(w => w.sequence.length === 0)) return;
-  if (allDone()) resetAllWalkers();
+  if (!Dispatch.isActive() && state.agvs.every(w => w.sequence.length === 0)) return;
+  if (!Dispatch.isActive() && allDone()) resetAllWalkers();
   state.playing = !state.playing;
   updatePlayButton();
 });
@@ -430,7 +502,7 @@ function startRecording() {
     alert('Video recording is not supported in this browser.\nPlease use Chrome or Edge.');
     return;
   }
-  if (state.agvs.every(w => w.sequence.length === 0)) {
+  if (!Dispatch.isActive() && state.agvs.every(w => w.sequence.length === 0)) {
     alert('Load a layout JSON file first.');
     return;
   }
@@ -757,7 +829,9 @@ function drawScene(timestamp) {
 
   // Each AGV body, hitch, conflict ring, action indicator
   state.agvs.forEach((agv, idx) => {
-    if (agv.phase === 'idle' || agv.sequence.length === 0) return;
+    // Skip only truly-idle AGVs. Dispatch AGVs waiting at home are 'parked'
+    // (rendered) even though their job sequence is momentarily empty.
+    if (agv.phase === 'idle' || (agv.phase !== 'parked' && agv.sequence.length === 0)) return;
 
     const { sx: ax, sy: ay } = imgToScreen(agv.agvPos.x, agv.agvPos.y, state.view);
     const rad = agv.agvHeading * Math.PI / 180;
@@ -841,16 +915,19 @@ function drawHUD(cw, ch) {
     ctx.fillStyle = '#9090a8';
     ctx.fillText('No layout loaded', x, ch - 11);
   } else {
+    const dispatchActive = Dispatch.isActive();
     activeWalkers.slice(0, 3).forEach((w, i) => {
       if (i > 0) {
         ctx.fillStyle = '#c0c0cc';
         ctx.fillText(' | ', x, ch - 11);
         x += ctx.measureText(' | ').width;
       }
-      const phaseLabel = w.phase === 'action_pause'
-        ? (w.sequence[w.currentStep]?.action?.toUpperCase() || 'PAUSE')
-        : w.phase.toUpperCase();
-      const label = `${w.id}: ${phaseLabel}`;
+      const phaseLabel = dispatchActive
+        ? Dispatch.stateLabel(w)
+        : (w.phase === 'action_pause'
+            ? (w.sequence[w.currentStep]?.action?.toUpperCase() || 'PAUSE')
+            : w.phase.toUpperCase());
+      const label = `${w.id}: ${phaseLabel}${dispatchActive && w.job ? ` (${w.job})` : ''}`;
       ctx.fillStyle = w.color;
       ctx.fillText(label, x, ch - 11);
       x += ctx.measureText(label).width;
@@ -860,6 +937,14 @@ function drawHUD(cw, ch) {
       const more = ` +${activeWalkers.length - 3} more`;
       ctx.fillText(more, x, ch - 11);
       x += ctx.measureText(more).width;
+    }
+    if (Dispatch.isActive()) {
+      const pend = Dispatch.pendingByLine();
+      const perLine = Dispatch.lineIds().map(id => `${id}:${pend[id] || 0}`).join('  ');
+      ctx.fillStyle = '#9090a8';
+      const qtxt = `   Queue: ${Dispatch.queueLength()}   ${perLine}`;
+      ctx.fillText(qtxt, x, ch - 11);
+      x += ctx.measureText(qtxt).width;
     }
     ctx.fillStyle = '#9090a8';
     ctx.fillText(`   Speed: ${state.timeScale}×`, x, ch - 11);
@@ -888,13 +973,16 @@ function tick(timestamp) {
 
   const dt = Math.min(rawDt, 0.1) * state.timeScale;
 
-  const anyActive = state.agvs.some(w => w.phase !== 'idle' && w.phase !== 'done');
-  if (state.playing && anyActive) {
+  const dispatchActive = Dispatch.isActive();
+  const anyActive = state.agvs.some(w => w.phase !== 'idle' && w.phase !== 'done' && w.phase !== 'parked');
+  if (state.playing && (anyActive || dispatchActive)) {
     state.elapsed += dt;
     updateAllWalkers(dt);
+    if (dispatchActive) Dispatch.update(dt);
     updateStatusBadge();
     updateStepCounter();
-    if (allDone()) {
+    const finished = dispatchActive ? Dispatch.allComplete() : allDone();
+    if (finished) {
       state.playing = false;
       updatePlayButton();
       if (rec.active) stopRecording();

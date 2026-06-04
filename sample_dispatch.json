@@ -1,0 +1,52 @@
+{
+  "NODES": {
+    "HS-1": { "x": 200, "y": 180, "type": "seq_point", "trackPoint": "TP-HS1", "heading": 0 },
+    "HS-2": { "x": 200, "y": 300, "type": "seq_point", "trackPoint": "TP-HS2", "heading": 0 },
+    "HS-3": { "x": 200, "y": 420, "type": "seq_point", "trackPoint": "TP-HS3", "heading": 0 },
+    "LA":   { "x": 820, "y": 180, "type": "seq_point", "trackPoint": "TP-LA",  "heading": 180 },
+    "LB":   { "x": 820, "y": 300, "type": "seq_point", "trackPoint": "TP-LB",  "heading": 180 },
+    "LC":   { "x": 820, "y": 420, "type": "seq_point", "trackPoint": "TP-LC",  "heading": 180 }
+  },
+  "AGVS": [
+    { "id": "AGV-01", "color": "#E63946", "sequence": [] },
+    { "id": "AGV-02", "color": "#4080e0", "sequence": [] },
+    { "id": "AGV-03", "color": "#1a9c50", "sequence": [] }
+  ],
+  "TRACK": {
+    "points": {
+      "TP-HS1": { "x": 200, "y": 180 },
+      "TP-HS2": { "x": 200, "y": 300 },
+      "TP-HS3": { "x": 200, "y": 420 },
+      "TP-H":   { "x": 510, "y": 300 },
+      "TP-LA":  { "x": 820, "y": 180 },
+      "TP-LB":  { "x": 820, "y": 300 },
+      "TP-LC":  { "x": 820, "y": 420 }
+    },
+    "segments": [
+      { "id": "S0", "from": "TP-HS1", "to": "TP-H", "type": "straight" },
+      { "id": "S1", "from": "TP-HS2", "to": "TP-H", "type": "straight" },
+      { "id": "S2", "from": "TP-HS3", "to": "TP-H", "type": "straight" },
+      { "id": "S3", "from": "TP-H",   "to": "TP-LA", "type": "straight" },
+      { "id": "S4", "from": "TP-H",   "to": "TP-LB", "type": "straight" },
+      { "id": "S5", "from": "TP-H",   "to": "TP-LC", "type": "straight" }
+    ]
+  },
+  "DISPATCH": {
+    "home": "HS-1",
+    "homeSlots": ["HS-1", "HS-2", "HS-3"],
+    "lines": [
+      { "id": "LINE-A", "node": "LA", "serviceAction": "exchange", "serviceTime": 3 },
+      { "id": "LINE-B", "node": "LB", "serviceAction": "exchange", "serviceTime": 3 },
+      { "id": "LINE-C", "node": "LC", "serviceAction": "exchange", "serviceTime": 3 }
+    ],
+    "requests": [
+      { "t": 1, "line": "LINE-A" },
+      { "t": 2, "line": "LINE-B" },
+      { "t": 3, "line": "LINE-C" },
+      { "t": 7, "line": "LINE-A", "agv": "AGV-01" },
+      { "t": 8, "line": "LINE-B" },
+      { "t": 9, "line": "LINE-C" }
+    ],
+    "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
+  }
+}

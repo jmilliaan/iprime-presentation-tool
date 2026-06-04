@@ -13,7 +13,7 @@ A browser-based AGV layout and animation suite for creating and presenting Autom
 Define the physical layout — place nodes on a floor plan image, draw the magnetic track network, and build sequences for up to 4 AGVs.
 
 ### Animation Player
-Load a saved layout JSON and play back multi-AGV movement sequences as an animation, with path coloring, manual-stop indicators, and video recording.
+Load a saved layout JSON and play back multi-AGV movement sequences as an animation, with path coloring, manual-stop indicators, and video recording. Supports two modes: **scripted** (fixed per-AGV sequences) and **dispatch** (on-demand FIFO request queue — see below).
 
 ---
 
@@ -32,6 +32,10 @@ Floor plan image + Coord Picker  →  coords.json  →  Animation Player
 7. Open **Animation Player**, load `coords.json` and the same floor plan image
 8. Press Play
 
+For a **live dispatch simulation** instead of a fixed script (lines call for service, AGVs queue and
+serve on demand), tag home/line nodes in the Coordinate Picker's **DISPATCH** panel and skip the
+per-AGV sequences — see [Dispatch Mode](#dispatch-mode-on-demand-fifo-simulation).
+
 ---
 
 ## Coordinate Picker
@@ -45,6 +49,9 @@ Floor plan image + Coord Picker  →  coords.json  →  Animation Player
 | Right-click | Undo last action in current mode |
 | Scroll | Zoom |
 | Middle-click drag | Pan |
+
+The **DISPATCH** panel (right side) is always available — use it to turn a layout into a dispatch
+scenario by tagging home/line nodes. See [Dispatch Mode](#dispatch-mode-on-demand-fifo-simulation).
 
 ---
 
@@ -108,6 +115,8 @@ Track points are drawn as blue diamonds; segments are drawn as blue lines/arcs. 
 | Action dur (s) | Default duration for pickup / release / exchange stops |
 | Grid / Labels | Toggle grid overlay and node labels |
 | ⏺ Record | Capture animation as `.webm` video (Chrome / Edge only) |
+| **Call LINE-X** | *(dispatch layouts only)* Inject an on-demand request for that line |
+| **Auto** | *(dispatch layouts only)* Toggle the seeded random request generator |
 
 ### Visual guide
 
@@ -216,6 +225,83 @@ Track points are drawn as blue diamonds; segments are drawn as blue lines/arcs. 
 | `segments[].clockwise` | `true` = clockwise arc visually (arc only) |
 
 > **Legacy format:** A single-AGV file with a top-level `SEQUENCE` array (no `AGVS` key) is still supported — the player wraps it as a single red AGV automatically.
+
+---
+
+## Dispatch Mode (on-demand FIFO simulation)
+
+Scripted sequences play a fixed timeline. **Dispatch mode** turns the player into a live
+discrete-event simulation: production *lines* request service on demand, requests queue **FIFO**, an
+idle AGV is dispatched from **home** to serve the head of the queue, AGVs genuinely **wait/yield** on
+shared track (real queueing, not just a collision blink), then return to their home slot.
+
+Dispatch mode activates automatically when the layout JSON contains a `DISPATCH` block. AGVs start
+with empty sequences — the engine builds each job (`home → line → serve → home`) dynamically.
+
+### Authoring (Coordinate Picker)
+1. Place `seq_point` nodes for the home parking slots and each line's service point (snap them to the
+   track so AGVs route correctly).
+2. Open the **DISPATCH** panel (right side), tick **Enable dispatch mode**.
+3. For each node choose a role: **home** (parking slot — order = AGV order) or **line** (service point,
+   with a service-time field).
+4. Optionally type a **Requests** timeline (`t  LINE-X  [AGV-0N]`, one per line) for a repeatable
+   recording, and/or enable **Auto-generate** (seeded random arrivals).
+5. Save — a `DISPATCH` block is added to the JSON.
+
+### Playback controls (Animation Player)
+| Control | Action |
+|---------|--------|
+| **Call LINE-X** | Inject an on-demand request for that line (queues FIFO) |
+| **Auto** | Toggle the seeded random request generator |
+| HUD | Shows live queue length, pending count per line, and each AGV's state (HOME / TO LINE / SERVING / WAIT / RETURN) |
+
+- A request pinned to a specific AGV (`"agv": "AGV-01"`) is always served by that AGV — strict FIFO
+  means the queue head waits for its pinned AGV to free up.
+- **Deterministic video:** with a `requests` timeline (and auto-generate off), every recording is
+  identical (seeded RNG). Recording auto-stops once the timeline drains and all AGVs are home.
+
+### `DISPATCH` fields
+| Field | Description |
+|-------|-------------|
+| `home` | Node id of the dispatch base (fallback parking spot) |
+| `homeSlots` | Ordered node ids — one parking slot per AGV (recommended for multi-AGV so they don't contend for the same track point) |
+| `lines[]` | `{ id, node, serviceAction, serviceTime }` — service points that can request an AGV |
+| `requests[]` | Deterministic timeline `{ t, line, agv? }` (seconds, line id, optional AGV pin) |
+| `autoGenerate` | `{ enabled, meanInterval, seed }` — seeded Poisson on-demand generator |
+
+```json
+"DISPATCH": {
+  "home": "HS-1",
+  "homeSlots": ["HS-1", "HS-2", "HS-3"],
+  "lines": [
+    { "id": "LINE-A", "node": "LA", "serviceAction": "exchange", "serviceTime": 3 },
+    { "id": "LINE-B", "node": "LB", "serviceAction": "exchange", "serviceTime": 3 }
+  ],
+  "requests": [
+    { "t": 1, "line": "LINE-A" },
+    { "t": 4, "line": "LINE-A", "agv": "AGV-01" }
+  ],
+  "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
+}
+```
+
+> A ready-made example is in [`sample_dispatch.json`](sample_dispatch.json) (3 AGVs, 3 lines, no
+> background image needed). Track-yield queueing assumes a sensible track layout — head-on traffic on
+> a single shared lane can deadlock, so use loops/spurs for opposing flows.
+
+---
+
+## Project files
+
+| File | Role |
+|------|------|
+| `index.html` | Landing page linking the two tools |
+| `cpicker.html` / `cpicker.js` | Coordinate Picker — layout, track, sequence & dispatch authoring |
+| `animplayer.html` / `animplayer.js` | Animation Player — playback, rendering, video recording |
+| `dispatch.js` | On-demand FIFO dispatch & queue engine (loaded by the player) |
+| `shared.js` | Shared utilities — coordinate transforms, path following, JSON normalisation, seeded RNG |
+| `style.css` | Shared styling |
+| `sample_dispatch.json` | Ready-to-run 3-AGV / 3-line dispatch example |
 
 ---
 

@@ -52,6 +52,7 @@
       <label><input type="checkbox" id="showLabels" checked> Labels</label>
     </div>
     <div class="toolbar-sep"></div>
+    <div class="toolbar-group" id="dispatchControls" style="display:none;"></div>
     <span id="statusBadge" class="status-idle">IDLE</span>
     <span id="stepCounter">step 0 / 0</span>
     <div style="margin-left:auto;display:flex;gap:6px;">
@@ -73,6 +74,7 @@
   </dialog>
 
   <script src="shared.js"></script>
+  <script src="dispatch.js"></script>
   <script src="animplayer.js"></script>
   <script>
     document.getElementById('homeBtn').addEventListener('click', function () {

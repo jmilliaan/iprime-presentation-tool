@@ -207,6 +207,30 @@ dialog input[type="file"] {
 #seqPanel::-webkit-scrollbar-track { background: #f8f8fc; }
 #seqPanel::-webkit-scrollbar-thumb { background: #e0b0d8; border-radius: 3px; }
 
+/* ── Dispatch panel (cpicker) ────────────────────────────────────────── */
+#dispatchPanel {
+  position: fixed;
+  top: 40px;
+  right: 325px;
+  width: 240px;
+  max-height: calc(100vh - 80px);
+  background: rgba(255,255,255,0.95);
+  border: 1px solid #e0a020;
+  border-radius: 6px;
+  overflow-y: auto;
+  font-size: 12px;
+  backdrop-filter: blur(4px);
+}
+#dispatchPanel .panel-title { color: #9a6800; border-bottom: 1px solid #f0e0c0; }
+#dispatchBody { padding: 6px 10px; }
+.dispatch-enable { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #505060; margin: 4px 0; }
+.dispatch-sub { font-size: 10px; color: #808090; margin: 8px 0 3px; letter-spacing: 0.04em; }
+.dispatch-row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.dispatch-name { flex: 1; font-family: monospace; font-size: 11px; color: #1a1a2a; }
+.dispatch-row select { font-family: monospace; font-size: 11px; padding: 2px 4px; }
+.dispatch-st { width: 52px; font-family: monospace; font-size: 11px; padding: 2px 4px; }
+.dispatch-ta { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 11px; resize: vertical; }
+
 .panel-title {
   padding: 6px 10px;
   color: #aa2288;
@@ -467,6 +491,15 @@ dialog input[type="file"] {
 
 #toolbar button:hover { border-color: #4080e0; color: #1050c0; }
 #toolbar button.active { border-color: #1a8030; color: #1a6828; background: #e8f8ec; }
+
+#toolbar button.call-btn {
+  padding: 4px 9px;
+  font-size: 11px;
+  border-color: #e0a020;
+  color: #9a6800;
+  background: #fff8e8;
+}
+#toolbar button.call-btn:hover { border-color: #c08010; color: #7a5000; background: #ffefc8; }
 
 #toolbar select,
 #toolbar input[type="number"] {
