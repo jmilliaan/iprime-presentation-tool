@@ -223,15 +223,15 @@ function makeRng(seed) {
 }
 
 // ── Layout normalisation (Path / Stations / Groups / Call-stations) ────────
-// The current authoring schema. Maps the on-disk shape to the internal runtime
-// shape the engine already uses:
-//   PATH.nodes/edges  → { points, segments }  (same as the old TRACK)
-//   STATIONS[].link   → trackPoint            (so movement/BFS is untouched)
-// Everything is defaulted and invalid cross-references are filtered out, so a
-// partial or hand-broken file still loads instead of throwing.
+// The authoring schema. Routing is EXPLICIT: a group is the literal ordered
+// list of clicked nodes (path corners + action stations, no home); the AGV
+// drives straight from one to the next. PATH.nodes/edges are kept as a drawn
+// guide ({ points, segments }); the engine references node ids directly. Every
+// section is defaulted and bad cross-references are dropped so a partial file
+// still loads instead of throwing.
 
 function normaliseLayout(data) {
-  // PATH (geometry) → internal track shape
+  // PATH (geometry, drawn guide)
   const rawPath  = data.PATH || {};
   const points   = rawPath.nodes || {};
   const segments = (rawPath.edges || []).map(e => ({
@@ -244,35 +244,32 @@ function normaliseLayout(data) {
   })).filter(e => points[e.from] && points[e.to]);
   const path = { points, segments };
 
-  // STATIONS (action sites) → internal nodes, keeping the `trackPoint` field name
+  // STATIONS (action sites + home slots) — positions only; no path link needed
   const stations = {};
   for (const [id, s] of Object.entries(data.STATIONS || {})) {
     if (!s) continue;
-    stations[id] = {
-      x:          s.x,
-      y:          s.y,
-      role:       s.role === 'home' ? 'home' : 'action',
-      trackPoint: (s.link && points[s.link]) ? s.link : null,
-      kind:       'station',
-    };
+    stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action', kind: 'station' };
   }
 
-  // AGVS — identities only
+  // AGVS — identities only (#AGVs should equal #home stations)
   const agvs = (data.AGVS || []).map((a, i) => ({
     id:    a.id    || `AGV-0${i + 1}`,
     color: a.color || AGV_COLORS[i % AGV_COLORS.length],
   }));
 
-  // GROUPS — reusable multi-stop jobs
+  // A group node may be a path corner OR a station.
+  const nodeExists = id => !!points[id] || !!stations[id];
+
+  // GROUPS — explicit ordered node lists (home excluded; added per-AGV at run time)
   const groups = {};
   for (const [id, g] of Object.entries(data.GROUPS || {})) {
     if (!g) continue;
     const stops = (g.stops || [])
-      .filter(st => st && stations[st.station])
+      .filter(st => st && nodeExists(st.node))
       .map(st => {
         const o = {
-          station: st.station,
-          action:  ['pickup', 'release', 'exchange', 'move'].includes(st.action) ? st.action : 'move',
+          node:   st.node,
+          action: ['pickup', 'release', 'exchange', 'move'].includes(st.action) ? st.action : 'move',
         };
         if (typeof st.dwell === 'number') o.dwell = st.dwell;
         if (st.label) o.label = st.label;

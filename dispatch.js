@@ -127,23 +127,21 @@ const Dispatch = {
 
   _parkAll() {
     state.agvs.forEach((w, i) => {
-      const slotId = this._slotNodeId(i);
+      const slotId = this._slotNodeId(i);     // AGV i ↔ home slot i (#AGVs should equal #homes)
       const node   = slotId ? state.nodes[slotId] : null;
-      w.homeSlot       = slotId;
-      w.agvPos         = node ? { x: node.x, y: node.y } : { x: 40 + i * 50, y: 40 };
-      w.agvHeading     = 0;
-      w.currentTrackPt = node?.trackPoint || null;
-      w.sequence       = [];
-      w.currentStep    = 0;
-      w.actionTimer    = 0;
-      w.trolleyState   = 'empty';
-      w.trolleyPos     = null;
-      w.trackPath      = [];
-      w.trackPathIdx   = 0;
-      w.phase          = 'parked';
-      w.job            = null;
-      w.waiting        = false;
-      if (w.currentTrackPt) dispatch.reserved.set(w.currentTrackPt, w.id);
+      w.homeSlot     = slotId;
+      w.agvPos       = node ? { x: node.x, y: node.y } : { x: 40 + i * 50, y: 40 };
+      w.agvHeading   = 0;
+      w.currentNode  = slotId;                // node id the AGV is parked at / holding
+      w.sequence     = [];
+      w.currentStep  = 0;
+      w.actionTimer  = 0;
+      w.trolleyState = 'empty';
+      w.trolleyPos   = null;
+      w.phase        = 'parked';
+      w.job          = null;
+      w.waiting      = false;
+      if (w.currentNode) dispatch.reserved.set(w.currentNode, w.id);
     });
   },
 
@@ -194,21 +192,24 @@ const Dispatch = {
     }
   },
 
-  // Build the walker's sequence from a group: each stop, then return to home.
+  // Build the walker's sequence: the group's explicit nodes, then a straight
+  // return to THIS AGV's own home. The AGV is parked at home, so its first move
+  // (home → group's first node) is also a straight leg.
   _startJob(w, groupId) {
     const g = dispatch.groups[groupId];
     if (!g || g.stops.length === 0 || !w.homeSlot) return;
     const stops = g.stops.map(s => {
-      const o = { node: s.station, action: s.action, dwell: s.dwell ?? dispatch.serviceTime };
+      const o = { node: s.node, action: s.action,
+                  dwell: s.dwell ?? (s.action === 'move' ? 0 : dispatch.serviceTime) };
       if (s.label) o.label = s.label;
       if (s.mode === 'manual') o.mode = 'manual';
       return o;
     });
     w.job         = groupId;
     w.waiting     = false;
-    w.sequence    = [...stops, { node: w.homeSlot, action: 'move' }];
+    w.sequence    = [...stops, { node: w.homeSlot, action: 'move', dwell: 0 }];
     w.currentStep = 0;
     w.actionTimer = 0;
-    routeWalkerToStep(w);   // animplayer.js — sets trackPath + phase 'moving'
+    routeWalkerToStep(w);   // animplayer.js — starts the straight move to step 0
   },
 };

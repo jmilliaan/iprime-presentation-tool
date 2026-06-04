@@ -56,7 +56,7 @@ const startupModal = $('startupModal'), confirmClearModal = $('confirmClearModal
 const filenameInput = $('filenameInput'), loadJsonInput = $('loadJsonInput'), loadImgInput = $('loadImgInput');
 
 // transient pick context (which station the action/group picker is acting on)
-let pickStation = null;
+let pickNode = null;
 
 // ── Canvas sizing ─────────────────────────────────────────────────────────────
 
@@ -138,13 +138,13 @@ function loadIntoState(data) {
   };
   state.stations = {};
   for (const [id, s] of Object.entries(data.STATIONS || {}))
-    state.stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action', link: s.link || null };
+    state.stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action' };
   state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
   if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
   state.groups = {};
   for (const [id, g] of Object.entries(data.GROUPS || {}))
     state.groups[id] = { name: g.name || id, stops: (g.stops || []).map(st => {
-      const o = { station: st.station, action: st.action || 'move' };
+      const o = { node: st.node, action: st.action || 'move' };
       if (st.dwell !== undefined) o.dwell = st.dwell;
       return o;
     }) };
@@ -174,14 +174,8 @@ function syncCounters() {
 // ── Coordinate transforms / hit tests ──────────────────────────────────────────
 
 function toImg(sx, sy) { return screenToImg(sx, sy, state.view); }
-function nearestId(dict, ix, iy) {
-  let best = null, bd = Infinity;
-  for (const [id, p] of Object.entries(dict)) {
-    const d = Math.hypot(ix - p.x, iy - p.y);
-    if (d < bd) { bd = d; best = id; }
-  }
-  return best;
-}
+// A group node may be a path corner or a station.
+function nodePosC(id) { return state.path.nodes[id] || state.stations[id] || null; }
 function hitCorner(sx, sy) {
   for (const [id, p] of Object.entries(state.path.nodes)) {
     const s = imgToScreen(p.x, p.y, state.view);
@@ -365,9 +359,7 @@ function updateStationBar() {
 function onClickStation(sx, sy) {
   const { ix, iy } = toImg(sx, sy);
   const id = nextStationId(state.placeRole);
-  const link = nearestId(state.path.nodes, ix, iy);   // nearest corner (may be null if no path yet)
-  state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: state.placeRole, link };
-  if (!link) console.warn(`Station ${id} has no path corner to link to — draw the path first.`);
+  state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: state.placeRole };
   updateHud();
 }
 function undoStation() {
@@ -377,7 +369,7 @@ function undoStation() {
   delete state.stations[last];
   // cascade: drop references
   state.callStations = state.callStations.filter(c => c.station !== last);
-  for (const g of Object.values(state.groups)) g.stops = g.stops.filter(s => s.station !== last);
+  for (const g of Object.values(state.groups)) g.stops = g.stops.filter(s => s.node !== last);
   updateHud(); updateGroupsPanel();
 }
 
@@ -389,14 +381,27 @@ $('newGroupBtn').addEventListener('click', () => {
   state.activeGroup = id;
   updateGroupsPanel(); updateGroupBar();
 });
-function onClickGroup(sx, sy) {
-  const st = hitStation(sx, sy);
-  if (!st) return;
+function ensureActiveGroup() {
   if (!state.activeGroup) {
     const id = nextGroupId(); state.groups[id] = { name: id, stops: [] }; state.activeGroup = id; updateGroupsPanel();
   }
-  pickStation = st;
-  showActionPicker(sx, sy);
+}
+function onClickGroup(sx, sy) {
+  ensureActiveGroup();
+  // Action station → ask the action. Home stations are excluded from groups.
+  const st = hitStation(sx, sy);
+  if (st) {
+    if (state.stations[st].role === 'home') return;
+    pickNode = st;
+    showActionPicker(sx, sy);
+    return;
+  }
+  // Path corner → append as a pass-through (move), no prompt.
+  const c = hitCorner(sx, sy);
+  if (c) {
+    state.groups[state.activeGroup].stops.push({ node: c, action: 'move' });
+    updateGroupsPanel();
+  }
 }
 function undoGroupStop() {
   const g = state.groups[state.activeGroup];
@@ -430,7 +435,8 @@ function updateGroupsPanel() {
       g.stops.forEach((s, i) => {
         const sr = document.createElement('div');
         sr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;';
-        sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${s.station}</span><span style="color:#1a6828;">${s.action}</span>`;
+        const isStation = !!state.stations[s.node];
+        sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${s.node}</span><span style="color:${isStation ? '#1a6828' : '#888'};">${isStation ? s.action : '·'}</span>`;
         groupsBody.appendChild(sr);
       });
     }
@@ -444,7 +450,7 @@ function onClickCall(sx, sy) {
   const st = hitStation(sx, sy);
   if (!st) return;
   if (Object.keys(state.groups).length === 0) { alert('Create a group first (Group mode).'); return; }
-  pickStation = st;
+  pickNode = st;
   showGroupPicker(sx, sy);
 }
 function removeCallAt(sx, sy) {
@@ -457,7 +463,7 @@ function removeCallAt(sx, sy) {
 actionPicker.querySelectorAll('button[data-action]').forEach(btn => {
   btn.addEventListener('click', () => {
     const g = state.groups[state.activeGroup];
-    if (g && pickStation) { g.stops.push({ station: pickStation, action: btn.dataset.action }); updateGroupsPanel(); }
+    if (g && pickNode) { g.stops.push({ node: pickNode, action: btn.dataset.action }); updateGroupsPanel(); }
     hideActionPicker();
   });
 });
@@ -474,8 +480,8 @@ function showGroupPicker(sx, sy) {
     const b = document.createElement('button');
     b.textContent = id;
     b.addEventListener('click', () => {
-      state.callStations = state.callStations.filter(c => c.station !== pickStation);
-      state.callStations.push({ station: pickStation, group: id });
+      state.callStations = state.callStations.filter(c => c.station !== pickNode);
+      state.callStations.push({ station: pickNode, group: id });
       hideGroupPicker(); updateHud();
     });
     groupPickerBody.appendChild(b);
@@ -601,28 +607,20 @@ function drawLoop() {
     ctx.restore();
   }
 
-  // station→corner link hints
-  for (const st of Object.values(state.stations)) {
-    if (!st.link || !state.path.nodes[st.link]) continue;
-    const a = imgToScreen(st.x, st.y, state.view);
-    const b = imgToScreen(state.path.nodes[st.link].x, state.path.nodes[st.link].y, state.view);
-    ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
-    ctx.strokeStyle = 'rgba(120,120,140,0.5)'; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.stroke(); ctx.setLineDash([]);
-  }
-
-  // active group path preview
+  // active group path preview — straight legs through the explicit nodes
   if (state.mode === 'GROUP' && state.activeGroup) {
-    const stops = state.groups[state.activeGroup].stops.filter(s => state.stations[s.station]);
+    const stops = state.groups[state.activeGroup].stops.filter(s => nodePosC(s.node));
     for (let i = 0; i < stops.length - 1; i++) {
-      const A = state.stations[stops[i].station], B = state.stations[stops[i + 1].station];
+      const A = nodePosC(stops[i].node), B = nodePosC(stops[i + 1].node);
       const a = imgToScreen(A.x, A.y, state.view), b = imgToScreen(B.x, B.y, state.view);
       ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
       ctx.strokeStyle = 'rgba(204,68,170,0.6)'; ctx.lineWidth = 2; ctx.stroke();
     }
     stops.forEach((s, i) => {
-      const p = state.stations[s.station]; const { sx, sy } = imgToScreen(p.x, p.y, state.view);
+      const p = nodePosC(s.node); const { sx, sy } = imgToScreen(p.x, p.y, state.view);
       ctx.fillStyle = '#cc44aa'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText(`${i + 1}:${s.action[0]}`, sx, sy - DOT_R - 2);
+      const lbl = state.stations[s.node] ? `${i + 1}:${s.action[0]}` : `${i + 1}`;
+      ctx.fillText(lbl, sx, sy - DOT_R - 2);
     });
   }
 

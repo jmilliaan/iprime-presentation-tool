@@ -47,42 +47,31 @@ const state = {
 
 function makeWalker(agvDef) {
   return {
-    id:             agvDef.id    || 'AGV-01',
-    color:          agvDef.color || AGV_COLORS[0],
-    sequence:       agvDef.sequence || [],
-    currentStep:    0,
-    agvPos:         { x: 0, y: 0 },
-    agvHeading:     0,
-    trolleyState:   'empty',
-    trolleyPos:     null,
-    phase:          'idle',   // 'idle' | 'action_pause' | 'moving' | 'done' | 'parked'
-    actionTimer:    0,
-    trackPath:      [],   // track point IDs to follow to next sequence node
-    trackPathIdx:   0,
-    currentTrackPt: null,
-    job:            null, // dispatch mode: current line id being served, or null
-    homeSlot:       null, // dispatch mode: node id of this AGV's parking spot
-    waiting:        false,// dispatch mode: held by a track reservation ahead
+    id:           agvDef.id    || 'AGV-01',
+    color:        agvDef.color || AGV_COLORS[0],
+    sequence:     agvDef.sequence || [],
+    currentStep:  0,
+    agvPos:       { x: 0, y: 0 },
+    agvHeading:   0,
+    trolleyState: 'empty',
+    trolleyPos:   null,
+    phase:        'idle',   // 'idle' | 'action_pause' | 'moving' | 'done' | 'parked'
+    actionTimer:  0,
+    currentNode:  null,     // node id the AGV is at / holding a reservation on
+    job:          null,     // current group id being served, or null
+    homeSlot:     null,     // node id of this AGV's home slot
+    waiting:      false,    // held by a reservation on the node ahead
   };
 }
 
-// Set up track routing for a walker to move from its current track point toward
-// w.sequence[w.currentStep], then switch it into the 'moving' phase. Shared by
-// the action_pause→moving transition and by the dispatch engine when it hands a
-// walker a fresh job.
+// A sequence node is either a path corner or a station — look up its position.
+function nodePos(id) { return state.track.points[id] || state.nodes[id] || null; }
+
+// Explicit routing: just switch the walker into 'moving' toward its current
+// step. Movement goes straight from node to node — no pathfinding.
 function routeWalkerToStep(w) {
-  const nextNode = state.nodes[w.sequence[w.currentStep]?.node];
-  const fromTP   = w.currentTrackPt;
-  const toTP     = nextNode?.trackPoint || null;
-  if (fromTP && toTP && state.track.segments.length > 0) {
-    const route = routeOnTrack(fromTP, toTP);
-    w.trackPath = route ? route.slice(1) : [];
-  } else {
-    w.trackPath = [];
-  }
-  w.trackPathIdx = 0;
-  w.phase        = 'moving';
-  w.actionTimer  = 0;
+  w.phase       = 'moving';
+  w.actionTimer = 0;
 }
 
 function actionDurationFor(seqE) {
@@ -125,9 +114,7 @@ function resetWalker(w) {
   w.trolleyPos     = null;
   w.phase          = 'action_pause';
   w.actionTimer    = 0;
-  w.trackPath      = [];
-  w.trackPathIdx   = 0;
-  w.currentTrackPt = startPt.trackPoint || null;
+  w.currentNode    = startNodeId;
   w.job            = null;
   w.waiting        = false;
 }
@@ -143,50 +130,33 @@ function updateWalker(w, dt) {
 
   if (w.phase === 'action_pause') {
     const seqE     = w.sequence[w.currentStep];
-    const action   = seqE.action;
     const duration = actionDurationFor(seqE);
     w.actionTimer += dt;
 
     if (w.actionTimer >= duration) {
-      const nodePt = state.nodes[seqE.node];
-      if (nodePt) applyActionEffect(action, nodePt, w);
+      const np = nodePos(seqE.node);
+      if (np) applyActionEffect(seqE.action, np, w);
 
       w.currentStep++;
       if (w.currentStep >= w.sequence.length) { w.phase = 'done'; return; }
-
-      // Initialise track routing for this move segment
-      const prevNode = state.nodes[w.sequence[w.currentStep - 1].node];
-      w.currentTrackPt = prevNode?.trackPoint || w.currentTrackPt;
-      routeWalkerToStep(w);
+      routeWalkerToStep(w);   // explicit: go straight to the next node
     }
     return;
   }
 
   if (w.phase === 'moving') {
-    const targetNode = state.nodes[w.sequence[w.currentStep].node];
-    if (!targetNode) { w.phase = 'done'; return; }
+    const targetId = w.sequence[w.currentStep].node;
+    const to       = nodePos(targetId);
+    if (!to) { w.phase = 'done'; return; }
 
-    // Determine immediate sub-target: next track point or final node
-    const hasTrackWaypoint = w.trackPath.length > 0 && w.trackPathIdx < w.trackPath.length;
-    const nextTpId    = hasTrackWaypoint ? w.trackPath[w.trackPathIdx] : null;
-
-    // Real queueing: in dispatch mode an AGV must reserve the next track point
-    // before entering it. If another AGV holds it, hold position and wait.
-    if (Dispatch.isActive() && nextTpId) {
-      if (!Dispatch.tryReserve(nextTpId, w.id)) { w.waiting = true; return; }
-    }
+    // Real queueing: reserve the next node before entering it. If another AGV
+    // holds it, hold position and wait.
+    if (Dispatch.isActive() && !Dispatch.tryReserve(targetId, w.id)) { w.waiting = true; return; }
     w.waiting = false;
 
-    const movingToPos = hasTrackWaypoint
-      ? state.track.points[nextTpId]
-      : targetNode;
-    if (!movingToPos) { w.phase = 'done'; return; }
+    const result = advanceAlongPath(w.agvPos, [{ x: w.agvPos.x, y: w.agvPos.y }, to], 1, state.agvSpeed, dt);
 
-    const path   = [{ x: w.agvPos.x, y: w.agvPos.y }, movingToPos];
-    const result = advanceAlongPath(w.agvPos, path, 1, state.agvSpeed, dt);
-
-    const dx = movingToPos.x - w.agvPos.x;
-    const dy = movingToPos.y - w.agvPos.y;
+    const dx = to.x - w.agvPos.x, dy = to.y - w.agvPos.y;
     if (Math.hypot(dx, dy) > 0.5) {
       const targetHeading = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
       let diff = targetHeading - w.agvHeading;
@@ -199,19 +169,12 @@ function updateWalker(w, dt) {
 
     w.agvPos = result.pos;
 
-    if (result.targetIdx >= path.length) {
-      w.agvPos = { x: movingToPos.x, y: movingToPos.y };
-      if (hasTrackWaypoint) {
-        // Reached the next track point: release the one behind, keep this one.
-        if (Dispatch.isActive()) Dispatch.release(w.currentTrackPt, w.id);
-        w.currentTrackPt = nextTpId;
-        w.trackPathIdx++;
-      } else {
-        // Arrived at destination node — facing stays auto (toward travel)
-        if (targetNode.trackPoint) w.currentTrackPt = targetNode.trackPoint;
-        w.phase       = 'action_pause';
-        w.actionTimer = 0;
-      }
+    if (result.targetIdx >= 2) {
+      w.agvPos = { x: to.x, y: to.y };
+      if (Dispatch.isActive()) Dispatch.release(w.currentNode, w.id);  // release the node behind
+      w.currentNode = targetId;                                        // now hold the one we reached
+      w.phase       = 'action_pause';
+      w.actionTimer = 0;
     }
   }
 }
@@ -253,35 +216,6 @@ function detectConflicts() {
     }
   }
   return conflicting;
-}
-
-// ── Track routing ─────────────────────────────────────────────────────────
-
-function buildTrackAdjacency() {
-  const adj = new Map();
-  for (const seg of state.track.segments) {
-    if (!adj.has(seg.from)) adj.set(seg.from, []);
-    if (!adj.has(seg.to))   adj.set(seg.to,   []);
-    adj.get(seg.from).push(seg.to);
-    adj.get(seg.to).push(seg.from);
-  }
-  return adj;
-}
-
-function routeOnTrack(fromId, toId) {
-  if (fromId === toId) return [fromId];
-  const adj     = buildTrackAdjacency();
-  const visited = new Set([fromId]);
-  const queue   = [[fromId]];
-  while (queue.length > 0) {
-    const path = queue.shift();
-    const cur  = path[path.length - 1];
-    for (const nb of (adj.get(cur) || [])) {
-      if (nb === toId) return [...path, toId];
-      if (!visited.has(nb)) { visited.add(nb); queue.push([...path, nb]); }
-    }
-  }
-  return null;
 }
 
 // ── Canvas resize ─────────────────────────────────────────────────────────
@@ -764,9 +698,9 @@ function drawScene(timestamp) {
     }
   }
 
-  // Path lines per AGV — load-state color + AGV color (Features 1 & 2)
+  // Active job path per AGV — straight legs between the explicit nodes
   state.agvs.forEach(agv => {
-    const seq = agv.sequence.filter(e => state.nodes[e.node]);
+    const seq = agv.sequence.filter(e => nodePos(e.node));
     if (seq.length < 2) return;
     let carrying = false;
     for (let i = 0; i < seq.length - 1; i++) {
@@ -774,8 +708,8 @@ function drawScene(timestamp) {
       if (a === 'pickup')   carrying = true;
       if (a === 'release')  carrying = false;
       if (a === 'exchange') carrying = true;
-      const ptA = state.nodes[seq[i].node];
-      const ptB = state.nodes[seq[i + 1].node];
+      const ptA = nodePos(seq[i].node);
+      const ptB = nodePos(seq[i + 1].node);
       const { sx: ax, sy: ay } = imgToScreen(ptA.x, ptA.y, state.view);
       const { sx: bx, sy: by } = imgToScreen(ptB.x, ptB.y, state.view);
       ctx.beginPath();

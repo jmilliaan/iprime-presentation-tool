@@ -19,12 +19,12 @@
     ]
   },
   "STATIONS": {
-    "HS-1": { "x": 175, "y": 180, "role": "home",   "link": "P-1" },
-    "HS-2": { "x": 175, "y": 300, "role": "home",   "link": "P-2" },
-    "HS-3": { "x": 175, "y": 420, "role": "home",   "link": "P-3" },
-    "LA":   { "x": 848, "y": 180, "role": "action", "link": "P-4" },
-    "LB":   { "x": 848, "y": 300, "role": "action", "link": "P-5" },
-    "LC":   { "x": 848, "y": 420, "role": "action", "link": "P-6" }
+    "HS-1": { "x": 170, "y": 180, "role": "home" },
+    "HS-2": { "x": 170, "y": 300, "role": "home" },
+    "HS-3": { "x": 170, "y": 420, "role": "home" },
+    "LA":   { "x": 852, "y": 180, "role": "action" },
+    "LB":   { "x": 852, "y": 300, "role": "action" },
+    "LC":   { "x": 852, "y": 420, "role": "action" }
   },
   "AGVS": [
     { "id": "AGV-01", "color": "#E63946" },
@@ -32,11 +32,24 @@
     { "id": "AGV-03", "color": "#1a9c50" }
   ],
   "GROUPS": {
-    "G-A":  { "name": "Serve A",      "stops": [ { "station": "LA", "action": "exchange" } ] },
-    "G-B":  { "name": "Serve B",      "stops": [ { "station": "LB", "action": "exchange" } ] },
-    "G-C":  { "name": "Serve C",      "stops": [ { "station": "LC", "action": "exchange" } ] },
-    "G-AB": { "name": "A pick, B drop","stops": [ { "station": "LA", "action": "pickup" },
-                                                  { "station": "LB", "action": "release" } ] }
+    "G-A": { "name": "Serve A", "stops": [
+      { "node": "P-H", "action": "move" }, { "node": "P-4", "action": "move" },
+      { "node": "LA", "action": "exchange" },
+      { "node": "P-4", "action": "move" }, { "node": "P-H", "action": "move" } ] },
+    "G-B": { "name": "Serve B", "stops": [
+      { "node": "P-H", "action": "move" }, { "node": "P-5", "action": "move" },
+      { "node": "LB", "action": "exchange" },
+      { "node": "P-5", "action": "move" }, { "node": "P-H", "action": "move" } ] },
+    "G-C": { "name": "Serve C", "stops": [
+      { "node": "P-H", "action": "move" }, { "node": "P-6", "action": "move" },
+      { "node": "LC", "action": "exchange" },
+      { "node": "P-6", "action": "move" }, { "node": "P-H", "action": "move" } ] },
+    "G-AB": { "name": "A pick, B drop", "stops": [
+      { "node": "P-H", "action": "move" }, { "node": "P-4", "action": "move" },
+      { "node": "LA", "action": "pickup" },
+      { "node": "P-4", "action": "move" }, { "node": "P-H", "action": "move" },
+      { "node": "P-5", "action": "move" }, { "node": "LB", "action": "release" },
+      { "node": "P-5", "action": "move" }, { "node": "P-H", "action": "move" } ] }
   },
   "CALL_STATIONS": [
     { "station": "LA", "group": "G-A" },
@@ -45,15 +58,15 @@
   ],
   "HOME": { "slots": ["HS-1", "HS-2", "HS-3"] },
   "SIM": {
-    "agvSpeed": 120,
+    "agvSpeed": 160,
     "serviceTime": 3,
     "requests": [
-      { "t": 1, "group": "G-A" },
-      { "t": 2, "group": "G-B" },
-      { "t": 3, "group": "G-C" },
-      { "t": 5, "group": "G-AB" },
-      { "t": 7, "group": "G-A", "agv": "AGV-01" },
-      { "t": 8, "group": "G-C" }
+      { "t": 1,  "group": "G-A" },
+      { "t": 2,  "group": "G-B" },
+      { "t": 3,  "group": "G-C" },
+      { "t": 4,  "group": "G-AB" },
+      { "t": 70, "group": "G-A", "agv": "AGV-01" },
+      { "t": 71, "group": "G-B" }
     ],
     "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
   }
