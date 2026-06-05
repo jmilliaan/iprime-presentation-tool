@@ -1,6 +1,7 @@
 // shared.js — utilities used by both cpicker.js and animplayer.js
 
 const AGV_COLORS = ['#E63946', '#4080e0', '#1a9c50', '#cc44aa'];
+const HOME_ACTIONS = ['none', 'attach-empty', 'attach-full', 'detach-empty', 'detach-full'];
 
 const ZOOM_MIN  = 0.1;
 const ZOOM_MAX  = 8.0;
@@ -267,7 +268,7 @@ function normaliseLayout(data) {
     if (a === 'release') return 'none';
     return ['move', 'none', 'empty', 'full'].includes(a) ? a : 'move';
   };
-  const normHomeAct = a => (a == null ? null : (['none', 'empty', 'full'].includes(normAction(a)) ? normAction(a) : null));
+  const normHomeAct = a => (HOME_ACTIONS.includes(a) ? a : 'none');
 
   // GROUPS — explicit ordered node lists (home excluded; added per-AGV at run time)
   const groups = {};

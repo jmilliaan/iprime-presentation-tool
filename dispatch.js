@@ -191,22 +191,29 @@ const Dispatch = {
     }
   },
 
-  // Build the walker's sequence: an optional home-start action, the group's
+  // Build the walker's sequence: an optional home-start task, the group's
   // explicit nodes, then a return to THIS AGV's own home (with an optional
-  // home-end action). The AGV is parked at home, so the home legs are straight.
+  // home-end task). The AGV is parked at home, so the home legs are straight.
   _startJob(w, groupId) {
     const g = dispatch.groups[groupId];
-    if (!g || (g.stops.length === 0 && !g.homeStart && !g.homeEnd) || !w.homeSlot) return;
+    if (!g || (g.stops.length === 0 && g.homeStart === 'none' && g.homeEnd === 'none') || !w.homeSlot) return;
     const dwellFor = a => (a === 'move' ? 0 : dispatch.serviceTime);
     const seq = [];
-    if (g.homeStart) seq.push({ node: w.homeSlot, action: g.homeStart, dwell: dispatch.serviceTime });
+    if (g.homeStart !== 'none') {
+      seq.push({ node: w.homeSlot, action: g.homeStart, dwell: dispatch.serviceTime, homeAction: true });
+    }
     g.stops.forEach(s => {
       const o = { node: s.node, action: s.action, dwell: s.dwell ?? dwellFor(s.action) };
       if (s.label) o.label = s.label;
       if (s.mode === 'manual') o.mode = 'manual';
       seq.push(o);
     });
-    seq.push({ node: w.homeSlot, action: g.homeEnd || 'move', dwell: g.homeEnd ? dispatch.serviceTime : 0 });
+    seq.push({
+      node: w.homeSlot,
+      action: g.homeEnd !== 'none' ? g.homeEnd : 'move',
+      dwell: g.homeEnd !== 'none' ? dispatch.serviceTime : 0,
+      homeAction: g.homeEnd !== 'none',
+    });
     w.job         = groupId;
     w.waiting     = false;
     w.sequence    = seq;

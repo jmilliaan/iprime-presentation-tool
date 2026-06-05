@@ -13,6 +13,13 @@ const ctx    = canvas.getContext('2d');
 const CORNER_HIT  = 14;
 const STATION_HIT = 16;
 const DOT_R       = 6;
+const HOME_ACTION_LABELS = {
+  none: 'nothing',
+  'attach-empty': 'attach empty',
+  'attach-full': 'attach full',
+  'detach-empty': 'detach empty',
+  'detach-full': 'detach full',
+};
 
 // ── State ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +27,7 @@ const state = {
   path:     { nodes: {}, edges: [] },     // nodes: {id:{x,y}}  edges: [{id,from,to,type,radius,clockwise}]
   stations: {},                           // id -> {x,y,role:'action'|'home',link}
   agvs:     [{ id: 'AGV-01', color: AGV_COLORS[0] }],
-  groups:   {},                           // id -> {name, stops:[{station,action,dwell?}]}
+  groups:   {},                           // id -> {name, stops:[{station,action,dwell?}], homeStart, homeEnd}
   activeGroup:  null,
   calls:    [],                           // [{x,y,group}] — free-floating call buttons
   sim: { agvSpeed: 120, serviceTime: 3, requests: [],
@@ -56,7 +63,7 @@ const startupModal = $('startupModal'), confirmClearModal = $('confirmClearModal
 const filenameInput = $('filenameInput'), loadJsonInput = $('loadJsonInput'), loadImgInput = $('loadImgInput');
 
 // transient pick context
-let pickTarget = null;   // action picker: {kind:'stop',node} | {kind:'homeStart'} | {kind:'homeEnd'}
+let pickTarget = null;   // action picker: {kind:'stop',node}
 let pendingCall = null;  // group picker (CALL mode): { x, y } of the new call marker
 
 // ── Canvas sizing ─────────────────────────────────────────────────────────────
@@ -142,9 +149,8 @@ function loadIntoState(data) {
     state.stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action' };
   state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
   if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
-  const mapAct = a => (a === 'pickup' || a === 'exchange') ? 'full' : (a === 'release') ? 'none'
-    : (['move', 'none', 'empty', 'full'].includes(a) ? a : 'move');
-  const mapHome = a => (a == null ? null : (['none', 'empty', 'full'].includes(mapAct(a)) ? mapAct(a) : null));
+  const mapAct = a => (['move', 'none', 'empty', 'full'].includes(a) ? a : 'move');
+  const mapHome = a => HOME_ACTIONS.includes(a) ? a : 'none';
   state.groups = {};
   for (const [id, g] of Object.entries(data.GROUPS || {}))
     state.groups[id] = { name: g.name || id, homeStart: mapHome(g.homeStart), homeEnd: mapHome(g.homeEnd),
@@ -383,7 +389,7 @@ function undoStation() {
 
 // ── GROUP mode ─────────────────────────────────────────────────────────────────
 
-function newGroup() { const id = nextGroupId(); state.groups[id] = { name: id, stops: [], homeStart: null, homeEnd: null }; return id; }
+function newGroup() { const id = nextGroupId(); state.groups[id] = { name: id, stops: [], homeStart: 'none', homeEnd: 'none' }; return id; }
 $('newGroupBtn').addEventListener('click', () => {
   state.activeGroup = newGroup();
   updateGroupsPanel(); updateGroupBar();
@@ -408,15 +414,6 @@ function onClickGroup(sx, sy) {
     updateGroupsPanel();
   }
 }
-// Home-start / Home-end buttons (group bar) — abstract actions at the AGV's own home.
-function pickHome(kind) {
-  ensureActiveGroup();
-  pickTarget = { kind };
-  const r = $('groupBar').getBoundingClientRect();
-  showActionPicker(r.left + 40, r.top - 150);
-}
-$('homeStartBtn').addEventListener('click', () => pickHome('homeStart'));
-$('homeEndBtn').addEventListener('click', () => pickHome('homeEnd'));
 function undoGroupStop() {
   const g = state.groups[state.activeGroup];
   if (g && g.stops.length) { g.stops.pop(); updateGroupsPanel(); }
@@ -446,13 +443,31 @@ function updateGroupsPanel() {
     groupsBody.appendChild(row);
 
     if (id === state.activeGroup) {
-      const homeRow = (label, val) => {
+      const homeRow = (label, key) => {
         const hr = document.createElement('div');
-        hr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;color:#2c6fbf;';
-        hr.innerHTML = `<span style="flex:1;">${label}</span><span>${val || '—'}</span>`;
+        hr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;align-items:center;color:#2c6fbf;';
+        const span = document.createElement('span');
+        span.style.flex = '1';
+        span.textContent = label;
+        const select = document.createElement('select');
+        select.style.cssText = 'font-family:monospace;font-size:11px;padding:2px 4px;border:1px solid #c0c0cc;border-radius:4px;background:#fff;color:#1a1a2a;';
+        HOME_ACTIONS.forEach(action => {
+          const opt = document.createElement('option');
+          opt.value = action;
+          opt.textContent = HOME_ACTION_LABELS[action];
+          select.appendChild(opt);
+        });
+        select.value = g[key] || 'none';
+        select.addEventListener('click', ev => ev.stopPropagation());
+        select.addEventListener('change', ev => {
+          g[key] = ev.target.value;
+          updateGroupsPanel();
+        });
+        hr.appendChild(span);
+        hr.appendChild(select);
         groupsBody.appendChild(hr);
       };
-      homeRow('home-start', g.homeStart);
+      homeRow('home-start', 'homeStart');
       g.stops.forEach((s, i) => {
         const sr = document.createElement('div');
         sr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;';
@@ -460,7 +475,7 @@ function updateGroupsPanel() {
         sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${s.node}</span><span style="color:${isStation ? '#1a6828' : '#888'};">${isStation ? s.action : '·'}</span>`;
         groupsBody.appendChild(sr);
       });
-      homeRow('home-end', g.homeEnd);
+      homeRow('home-end', 'homeEnd');
     }
   }
   updateGroupBar(); updateHud();
@@ -492,9 +507,7 @@ actionPicker.querySelectorAll('button[data-action]').forEach(btn => {
     const g = state.groups[state.activeGroup];
     const act = btn.dataset.action;   // none | empty | full
     if (g && pickTarget) {
-      if (pickTarget.kind === 'stop')           g.stops.push({ node: pickTarget.node, action: act });
-      else if (pickTarget.kind === 'homeStart') g.homeStart = act;
-      else if (pickTarget.kind === 'homeEnd')   g.homeEnd   = act;
+      if (pickTarget.kind === 'stop') g.stops.push({ node: pickTarget.node, action: act });
       updateGroupsPanel();
     }
     pickTarget = null;

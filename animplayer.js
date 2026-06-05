@@ -15,6 +15,10 @@ const LOAD_COLORS = {
   none:  '#9aa0a8',
   empty: '#F4A261',
   full:  '#c0392b',
+  'attach-empty': '#F4A261',
+  'attach-full':  '#c0392b',
+  'detach-empty': '#F4A261',
+  'detach-full':  '#c0392b',
 };
 
 // ── Application state ─────────────────────────────────────────────────────
@@ -79,8 +83,18 @@ function actionDurationFor(seqE) {
   return seqE.action === 'move' ? 0 : state.actionDuration;
 }
 
-function applyActionEffect(action, nodePos, w) {
-  // A stop sets the AGV's towed-trolley load; 'move' is a pass-through.
+function applyActionEffect(seqE, nodePos, w) {
+  const action = seqE?.action;
+  if (!action || action === 'move') return;
+
+  if (seqE.homeAction) {
+    if (action === 'attach-empty') w.load = 'empty';
+    else if (action === 'attach-full') w.load = 'full';
+    else if (action === 'detach-empty' || action === 'detach-full') w.load = 'none';
+    return;
+  }
+
+  // A station stop sets the AGV's towed-trolley load directly.
   if (action === 'none' || action === 'empty' || action === 'full') w.load = action;
 }
 
@@ -117,7 +131,7 @@ function updateWalker(w, dt) {
 
     if (w.actionTimer >= duration) {
       const np = nodePos(seqE.node);
-      if (np) applyActionEffect(seqE.action, np, w);
+      if (np) applyActionEffect(seqE, np, w);
 
       w.currentStep++;
       if (w.currentStep >= w.sequence.length) { w.phase = 'done'; return; }
@@ -524,9 +538,18 @@ function drawRoundRect(x, y, w, h, r, fill, stroke) {
 }
 
 function drawActionIndicator(sx, sy, action, progress, label) {
-  const col = LOAD_COLORS[action];
+  const col = LOAD_COLORS[action] || '#4080e0';
   if (!col) return;
-  const text = action === 'none' ? 'DROP' : action.toUpperCase();   // none/empty/full
+  const textMap = {
+    none: 'DROP',
+    empty: 'EMPTY',
+    full: 'FULL',
+    'attach-empty': 'ATT EMPTY',
+    'attach-full': 'ATT FULL',
+    'detach-empty': 'DET EMPTY',
+    'detach-full': 'DET FULL',
+  };
+  const text = textMap[action] || action.toUpperCase();
 
   const startAngle = -Math.PI / 2;
   const endAngle   = startAngle + 2 * Math.PI * Math.min(progress, 1);
