@@ -187,8 +187,20 @@ dialog input[type="file"] {
 
 /* ── New cpicker (Path/Station/Group/Call) ─────────────────────────────── */
 #groupPicker {
-  position: fixed; background: #ffffff; border: 1px solid #e0a020; border-radius: 6px;
-  padding: 8px; display: none; z-index: 200; box-shadow: 0 4px 16px rgba(0,0,0,0.15); min-width: 150px;
+  position: fixed;
+  right: 10px;
+  bottom: 40px;
+  width: 280px;
+  max-height: 320px;
+  background: rgba(255,255,255,0.97);
+  border: 1px solid #e0a020;
+  border-radius: 6px;
+  padding: 8px;
+  display: none;
+  z-index: 200;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  overflow-y: auto;
+  backdrop-filter: blur(4px);
 }
 #groupPicker .picker-label {
   font-size: 11px; color: #9a6800; padding: 2px 4px 6px; border-bottom: 1px solid #f0e0c0;
@@ -196,10 +208,41 @@ dialog input[type="file"] {
 }
 #groupPickerBody { display: flex; flex-direction: column; gap: 4px; }
 #groupPicker button {
-  padding: 6px 10px; border-radius: 4px; border: 1px solid #d8d8e0; background: #f8f8fc;
-  color: #1a1a2a; font-family: monospace; font-size: 12px; cursor: pointer; text-align: left;
+  padding: 7px 9px;
+  border-radius: 4px;
+  border: 1px solid #d8d8e0;
+  background: #f8f8fc;
+  color: #1a1a2a;
+  font-family: monospace;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
 }
 #groupPicker button:hover { border-color: #e0a020; color: #9a6800; background: #fff8e8; }
+#groupPicker .group-pick-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#groupPicker .group-pick-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#groupPicker .group-pick-id {
+  font-weight: bold;
+  color: #7a5200;
+}
+#groupPicker .group-pick-count {
+  color: #9a8b66;
+  font-size: 10px;
+}
+#groupPicker .group-pick-summary {
+  color: #4a4a58;
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+}
 
 /* Bottom-center mode bars reuse the trackBar look */
 #pathBar, #stationBar, #groupBar, #callBar {
@@ -525,19 +568,25 @@ dialog input[type="file"] {
 }
 
 #toolbar button {
-  padding: 5px 14px;
+  padding: 4px 11px;
   border-radius: 4px;
   border: 1px solid #c0c0cc;
-  background: #ffffff;
-  color: #1a1a2a;
+  background: linear-gradient(180deg, #38b85a 0%, #209144 100%);
+  color: #ffffff;
   font-family: monospace;
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.12s;
+  box-shadow: 0 2px 0 rgba(18,88,41,0.95), 0 3px 8px rgba(20,70,36,0.18);
+  transform: translateY(0);
+  transition: transform 0.08s, box-shadow 0.08s, filter 0.12s, border-color 0.12s;
 }
 
-#toolbar button:hover { border-color: #4080e0; color: #1050c0; }
-#toolbar button.active { border-color: #1a8030; color: #1a6828; background: #e8f8ec; }
+#toolbar button:hover { filter: brightness(1.06); border-color: #1d7b3b; }
+#toolbar button:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(18,88,41,0.9), 0 1px 4px rgba(20,70,36,0.16);
+}
+#toolbar button.active { border-color: #1d7b3b; background: linear-gradient(180deg, #2aa94b 0%, #18783a 100%); color: #ffffff; }
 
 #toolbar button.call-btn {
   padding: 4px 9px;
@@ -590,10 +639,115 @@ dialog input[type="file"] {
 
 #stepCounter { font-size: 11px; color: #9090a8; }
 
-#btnRecord          { border-color: #cc4444 !important; color: #cc4444 !important; }
+#btnRecord          { border-color: #cc4444 !important; color: #cc4444 !important; background: #ffffff !important; box-shadow: none !important; }
 #btnRecord:hover    { background: #cc4444 !important; color: #fff !important; }
 #btnRecord.recording { background: #cc4444 !important; color: #fff !important; animation: recPulse 1s ease-in-out infinite; }
 @keyframes recPulse { 0%,100% { opacity:1; } 50% { opacity:0.55; } }
+
+#homeBtn {
+  background: linear-gradient(180deg, #3aba5c 0%, #218e44 100%);
+  color: #fff;
+}
+
+/* Queue panel (animplayer, top-left) */
+/* The queue list is drawn on the canvas (so it is captured in recordings);
+   this HTML panel is kept for structure but hidden to avoid a duplicate. */
+#queuePanel {
+  display: none;
+  position: fixed;
+  top: 54px;
+  left: 10px;
+  width: 300px;
+  max-height: 280px;
+  background: rgba(255,255,255,0.97);
+  border: 1px solid #209144;
+  border-radius: 8px;
+  overflow-y: auto;
+  z-index: 60;
+  box-shadow: 0 3px 14px rgba(0,0,0,0.12);
+  backdrop-filter: blur(4px);
+}
+
+#queuePanel .panel-title {
+  color: #1d7b3b;
+  border-bottom: 1px solid #d8eedf;
+}
+
+#queueBody {
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queue-empty {
+  font-size: 11px;
+  color: #7a8790;
+  padding: 6px 4px;
+}
+
+.queue-entry {
+  border: 1px solid #d9e3dd;
+  border-radius: 6px;
+  background: #f7fbf8;
+  padding: 6px 7px;
+}
+
+.queue-entry.running {
+  border-color: #4ca567;
+  background: #ebf8ef;
+}
+
+.queue-entry.pending {
+  border-color: #d8e0db;
+  background: #fbfcfb;
+}
+
+.queue-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.queue-entry-name {
+  flex: 1;
+  color: #1a1a2a;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.queue-entry-id {
+  color: #7d8792;
+  font-size: 10px;
+}
+
+.queue-entry-state {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #cfd8d3;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.queue-entry.running .queue-entry-state {
+  border-color: #4ca567;
+  color: #176935;
+  background: #dff4e6;
+}
+
+.queue-entry.pending .queue-entry-state {
+  border-color: #c7d0cb;
+  color: #68737d;
+  background: #f1f4f2;
+}
+
+.queue-entry-detail {
+  font-size: 10px;
+  color: #58646e;
+  line-height: 1.35;
+}
 
 /* ── Name input bar (radial menu — seq_point naming step) ────────────── */
 

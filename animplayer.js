@@ -9,6 +9,8 @@ const BAR_BOTTOM = 48;
 const AGV_SIZE    = 30;
 const TROLLEY_LEN = 56;   // along the heading (~2× the old length)
 const TROLLEY_WID = 22;   // across
+const CALL_BTN_RADIUS = 13;
+const FOLLOW_MARGIN   = 10;   // image units — breathing room kept behind the AGV ahead
 
 // Colours for the load-setting action indicator at a stop.
 const LOAD_COLORS = {
@@ -46,6 +48,7 @@ const state = {
 
   lastTimestamp: null,
   elapsed:       0,
+  callPressFx:   [],
 };
 
 // ── Walker architecture ───────────────────────────────────────────────────
@@ -70,6 +73,70 @@ function makeWalker(agvDef) {
 
 // A sequence node is either a path corner or a station — look up its position.
 function nodePos(id) { return state.track.points[id] || state.nodes[id] || null; }
+
+// Safe centre-to-centre distance a follower must keep behind `leader`. A leader
+// towing a trolley sticks out further behind, so the gap grows to clear it.
+function requiredGapFor(leader) {
+  const half = AGV_SIZE / 2;
+  const rear = leader.load !== 'none' ? half + 8 + TROLLEY_LEN : half;   // rear extent of the leader
+  return rear + half + FOLLOW_MARGIN;
+}
+
+// Steps remaining until this job ends (the last step returns home). Fewer steps
+// = closer to home → higher priority at a shared node.
+function stepsToHome(w) { return w.sequence.length - w.currentStep; }
+
+// Strict, acyclic priority order for two AGVs contending for the same node:
+// the one closer to home wins; ties broken by id so it is deterministic.
+function hasMergePriority(w, o) {
+  const sw = stepsToHome(w), so = stepsToHome(o);
+  if (sw !== so) return sw < so;
+  return w.id < o.id;
+}
+
+// Topology-based collision clamp. `w` is driving the edge fromId→toId. Returns
+// how far it may advance this frame. Only three things block it:
+//   1. Tailing  — another AGV ahead on the SAME edge, same direction → keep a gap.
+//   2. Occupancy — another AGV physically sitting in our target node → stop short.
+//   3. Merge    — another AGV entering our target node from a DIFFERENT edge; if
+//                 it is closer to home it has priority and we wait short of the node.
+// AGVs on different edges (parallel lanes, any direction) are ignored — they may
+// overlap on screen but never wait for each other. Head-on on one edge is out of
+// scope. Returns Infinity when nothing blocks.
+function pathClampLimit(w, fromId, toId, to, dx, dy, len) {
+  if (len < 1e-6) return Infinity;
+  const ux = dx / len, uy = dy / len;
+  let lim = Infinity;
+  for (const o of state.agvs) {
+    if (o === w || o.phase === 'idle' || o.phase === 'done') continue;
+    const oTarget = o.phase === 'moving' ? o.sequence[o.currentStep]?.node : null;
+    const onB = o.currentNode === toId;           // o's last/held node is our target
+    if (!onB && oTarget !== toId) continue;       // o has nothing to do with our target node → ignore
+
+    const need = requiredGapFor(o);
+
+    if (o.currentNode === fromId && oTarget === toId) {
+      // 1. Same edge, same direction → follow with a gap behind o.
+      const rx = o.agvPos.x - w.agvPos.x, ry = o.agvPos.y - w.agvPos.y;
+      const forward = rx * ux + ry * uy;
+      if (forward <= 0) continue;                 // o is behind us on the line
+      lim = Math.min(lim, forward - need);
+      continue;
+    }
+
+    const odB = Math.hypot(o.agvPos.x - to.x, o.agvPos.y - to.y);
+    if (onB && odB < need) {
+      // 2. o is sitting in / passing through our target node → stop a gap short.
+      lim = Math.min(lim, len - need);
+    } else if (oTarget === toId && !hasMergePriority(w, o)) {
+      // 3. Merge from another edge and o has priority (closer to home) → wait short.
+      lim = Math.min(lim, len - need);
+    }
+    // else: o is heading to / leaving our node but we have priority, or it has
+    // already cleared the node → we proceed.
+  }
+  return lim;
+}
 
 // Explicit routing: just switch the walker into 'moving' toward its current
 // step. Movement goes straight from node to node — no pathfinding.
@@ -145,15 +212,11 @@ function updateWalker(w, dt) {
     const to       = nodePos(targetId);
     if (!to) { w.phase = 'done'; return; }
 
-    // Real queueing: reserve the next node before entering it. If another AGV
-    // holds it, hold position and wait.
-    if (Dispatch.isActive() && !Dispatch.tryReserve(targetId, w.id)) { w.waiting = true; return; }
-    w.waiting = false;
-
-    const result = advanceAlongPath(w.agvPos, [{ x: w.agvPos.x, y: w.agvPos.y }, to], 1, state.agvSpeed, dt);
-
     const dx = to.x - w.agvPos.x, dy = to.y - w.agvPos.y;
-    if (Math.hypot(dx, dy) > 0.5) {
+    const distToTarget = Math.hypot(dx, dy);
+
+    // Face the direction of travel.
+    if (distToTarget > 0.5) {
       const targetHeading = ((Math.atan2(dy, dx) * 180 / Math.PI) + 360) % 360;
       let diff = targetHeading - w.agvHeading;
       if (diff >  180) diff -= 360;
@@ -163,14 +226,27 @@ function updateWalker(w, dt) {
       w.agvHeading  = ((w.agvHeading % 360) + 360) % 360;
     }
 
-    w.agvPos = result.pos;
+    // Collision handling is topological: only same-edge tailing and same-node
+    // merges block. Parallel AGVs on other edges are ignored (graphics may
+    // overlap — that's fine).
+    let limit = state.agvSpeed * dt;
+    limit = Math.min(limit, Math.max(0, pathClampLimit(w, w.currentNode, targetId, to, dx, dy, distToTarget)));
 
-    if (result.targetIdx >= 2) {
-      w.agvPos = { x: to.x, y: to.y };
-      if (Dispatch.isActive()) Dispatch.release(w.currentNode, w.id);  // release the node behind
-      w.currentNode = targetId;                                        // now hold the one we reached
+    w.waiting = limit <= 0.05 && distToTarget > 0.6;
+
+    // Arrive if this frame's step reaches the node (don't overshoot past it).
+    if (distToTarget <= 0.5 || limit >= distToTarget) {
+      w.agvPos      = { x: to.x, y: to.y };
+      w.currentNode = targetId;
       w.phase       = 'action_pause';
       w.actionTimer = 0;
+      return;
+    }
+
+    // Otherwise advance toward the target by the clamped amount (r < 1).
+    if (limit > 0) {
+      const r = limit / distToTarget;
+      w.agvPos = { x: w.agvPos.x + dx * r, y: w.agvPos.y + dy * r };
     }
   }
 }
@@ -263,6 +339,7 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
       resetAllWalkers();
       updateStatusBadge();
       updateStepCounter();
+      updateQueuePanel();
     } catch (err) { console.warn(err); alert('Invalid or unreadable layout JSON.'); }
   };
   reader.readAsText(file);
@@ -289,6 +366,7 @@ const btnPlayPause = document.getElementById('btnPlayPause');
 const btnRestart   = document.getElementById('btnRestart');
 const statusBadge  = document.getElementById('statusBadge');
 const stepCounter  = document.getElementById('stepCounter');
+const queueBody    = document.getElementById('queueBody');
 
 function updatePlayButton() {
   btnPlayPause.textContent = state.playing ? '⏸ Pause' : '▶ Play';
@@ -326,6 +404,42 @@ function updateStepCounter() {
   }
 }
 
+function updateQueuePanel() {
+  if (!queueBody) return;
+  if (!Dispatch.isActive()) {
+    queueBody.innerHTML = '<div class="queue-empty">Load a layout with AGVs to view the queue.</div>';
+    return;
+  }
+
+  const running = Dispatch.runningSnapshot();
+  const pending = Dispatch.queueSnapshot();
+  const items = [
+    ...running.map(item => ({ ...item, detail: `AGV ${item.agv} is serving this sequence` })),
+    ...pending.map(item => ({
+      ...item,
+      detail: item.agv
+        ? `waiting in FIFO queue for ${item.agv}`
+        : `waiting in FIFO queue · position ${item.order}`,
+    })),
+  ];
+
+  if (items.length === 0) {
+    queueBody.innerHTML = '<div class="queue-empty">No running or pending sequences.</div>';
+    return;
+  }
+
+  queueBody.innerHTML = items.map(item => `
+    <div class="queue-entry ${item.state}">
+      <div class="queue-entry-head">
+        <span class="queue-entry-name">${item.name}</span>
+        <span class="queue-entry-id">${item.group}</span>
+        <span class="queue-entry-state">${item.state}</span>
+      </div>
+      <div class="queue-entry-detail">${item.detail}</div>
+    </div>
+  `).join('');
+}
+
 // Dispatch toolbar UI. Group calls are made by clicking the on-canvas call
 // markers, so the toolbar only carries the Auto-generate toggle + a hint.
 function buildDispatchUI() {
@@ -357,7 +471,7 @@ function buildDispatchUI() {
 function callMarkerAt(sx, sy) {
   for (const c of Dispatch.calls()) {
     const { sx: mx, sy: my } = imgToScreen(c.x, c.y, state.view);
-    if (Math.hypot(sx - mx, sy - my) <= AGV_SIZE / 2 + 6) return c;
+    if (Math.hypot(sx - mx, sy - my) <= CALL_BTN_RADIUS + 6) return c;
   }
   return null;
 }
@@ -375,6 +489,7 @@ btnRestart.addEventListener('click', () => {
   updatePlayButton();
   updateStatusBadge();
   updateStepCounter();
+  updateQueuePanel();
 });
 
 document.getElementById('speedSelect').addEventListener('change', (e) => {
@@ -498,7 +613,9 @@ canvas.addEventListener('mouseup', (e) => {
       const hit = callMarkerAt(e.clientX, e.clientY - BAR_TOP);
       if (hit) {
         Dispatch.enqueue({ group: hit.group });
+        state.callPressFx.push({ group: hit.group, x: hit.x, y: hit.y, until: state.elapsed + 0.24 });
         if (!state.playing) { state.playing = true; updatePlayButton(); }
+        updateQueuePanel();
       }
     }
   }
@@ -779,20 +896,44 @@ function drawScene(timestamp) {
   const pending = Dispatch.isActive() ? Dispatch.pendingByGroup() : {};
   Dispatch.calls().forEach(c => {
     const { sx, sy } = imgToScreen(c.x, c.y, state.view);
-    const r     = AGV_SIZE / 2 + 6;
+    const r     = CALL_BTN_RADIUS;
     const pulse = 0.45 + 0.55 * Math.abs(Math.sin(state.elapsed * 3));
+    const press = state.callPressFx.find(fx => fx.group === c.group && fx.x === c.x && fx.y === c.y && fx.until > state.elapsed);
+    const pressT = press ? (press.until - state.elapsed) / 0.24 : 0;
     ctx.beginPath();
     ctx.arc(sx, sy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = `rgba(230,160,32,${pulse.toFixed(2)})`;
-    ctx.lineWidth   = 2.5;
+    ctx.fillStyle = press ? '#1d7b3b' : '#2fb357';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth   = 1.5;
     ctx.stroke();
 
+    ctx.beginPath();
+    ctx.arc(sx - 3, sy - 4, Math.max(2, r * 0.45), Math.PI * 1.1, Math.PI * 1.9);
+    ctx.strokeStyle = `rgba(255,255,255,${(0.45 + pulse * 0.35).toFixed(2)})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    if (press) {
+      ctx.beginPath();
+      ctx.arc(sx, sy, r + (1 - pressT) * 8, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(38,140,72,${(pressT * 0.5).toFixed(2)})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
     const q = pending[c.group] || 0;
-    ctx.fillStyle    = '#9a6800';
+    ctx.fillStyle    = '#ffffff';
+    ctx.font         = 'bold 10px monospace';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('▶', sx, sy + 0.5);
+
+    ctx.fillStyle    = '#175f31';
     ctx.font         = 'bold 10px monospace';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(`▶ ${c.group}${q ? ` (${q})` : ''}`, sx, sy - r - 2);
+    ctx.fillText(`▶ ${c.group}${q ? ` (${q})` : ''}`, sx, sy - r - 3);
   });
 
   const conflicts = detectConflicts();
@@ -866,8 +1007,69 @@ function drawScene(timestamp) {
     }
   });
 
+  drawQueueOverlay(cw, ch);
   drawHUD(cw, ch);
   drawHeadingLegend(ctx, cw);
+}
+
+// On-canvas queue list (top-left) so it is captured in the recording. Mirrors
+// the running + pending snapshots the engine exposes.
+function drawQueueOverlay(cw, ch) {
+  if (!Dispatch.isActive()) return;
+  const running = Dispatch.runningSnapshot();
+  const pending = Dispatch.queueSnapshot();
+  const rows    = [...running, ...pending];
+
+  const x = 10, y = 10, w = 248;
+  const titleH = 24, rowH = 32, maxRows = 6;
+  const shown = rows.slice(0, maxRows);
+  const extra = rows.length - shown.length;
+  const bodyH = shown.length ? shown.length * rowH + (extra > 0 ? 16 : 0) + 8 : 26;
+  const h = titleH + bodyH;
+
+  ctx.save();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  drawRoundRect(x, y, w, h, 8, 'rgba(255,255,255,0.95)', '#209144');
+
+  ctx.fillStyle = '#1d7b3b';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText(`QUEUE — ${running.length} running · ${pending.length} waiting`, x + 10, y + titleH / 2 + 1);
+  ctx.strokeStyle = '#d8eedf';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x, y + titleH); ctx.lineTo(x + w, y + titleH); ctx.stroke();
+
+  if (!shown.length) {
+    ctx.fillStyle = '#7a8790';
+    ctx.font = '11px monospace';
+    ctx.fillText('No running or pending jobs.', x + 10, y + titleH + 13);
+    ctx.restore();
+    return;
+  }
+
+  let ry = y + titleH + 6;
+  shown.forEach(item => {
+    const isRun = item.state === 'running';
+    drawRoundRect(x + 6, ry, w - 12, rowH - 6, 5,
+      isRun ? '#ebf8ef' : '#fbfcfb',
+      isRun ? '#4ca567' : '#d8e0db');
+    ctx.fillStyle = '#1a1a2a';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(item.name.slice(0, 24), x + 12, ry + 9);
+    ctx.fillStyle = isRun ? '#176935' : '#68737d';
+    ctx.font = '9px monospace';
+    const detail = isRun
+      ? `▶ ${item.agv}`
+      : (item.agv ? `waiting · ${item.agv}` : `waiting · #${item.order}`);
+    ctx.fillText(`${item.group}   ${detail}`, x + 12, ry + 20);
+    ry += rowH;
+  });
+  if (extra > 0) {
+    ctx.fillStyle = '#7a8790';
+    ctx.font = '10px monospace';
+    ctx.fillText(`+${extra} more`, x + 12, ry + 7);
+  }
+  ctx.restore();
 }
 
 function drawHUD(cw, ch) {
@@ -942,6 +1144,7 @@ function tick(timestamp) {
   state.lastTimestamp = timestamp;
 
   const dt = Math.min(rawDt, 0.1) * state.timeScale;
+  state.callPressFx = state.callPressFx.filter(fx => fx.until > state.elapsed - 0.05);
 
   const dispatchActive = Dispatch.isActive();
   const anyActive = state.agvs.some(w => w.phase !== 'idle' && w.phase !== 'done' && w.phase !== 'parked');
@@ -951,7 +1154,11 @@ function tick(timestamp) {
     if (dispatchActive) Dispatch.update(dt);
     updateStatusBadge();
     updateStepCounter();
-    const finished = dispatchActive ? Dispatch.allComplete() : allDone();
+    // A scripted timeline (SIM.requests) has a natural end, so it auto-pauses
+    // and auto-stops recording once it drains. On-demand mode (no timeline) is
+    // live — it only ends when the user pauses or clicks Stop.
+    const scripted = dispatchActive && dispatch.requests.length > 0;
+    const finished = dispatchActive ? (scripted && Dispatch.allComplete()) : allDone();
     if (finished) {
       state.playing = false;
       updatePlayButton();
@@ -959,8 +1166,9 @@ function tick(timestamp) {
     }
   }
 
-  drawScene(timestamp);
+  drawScene(timestamp);   // the queue list is drawn on-canvas inside drawScene
   requestAnimationFrame(tick);
 }
 
+updateQueuePanel();
 requestAnimationFrame(tick);

@@ -20,11 +20,16 @@
   <!-- Main canvas (between the two bars) -->
   <canvas id="canvas"></canvas>
 
+  <div id="queuePanel">
+    <div class="panel-title">QUEUE</div>
+    <div id="queueBody"></div>
+  </div>
+
   <!-- Bottom player toolbar -->
   <div id="toolbar">
     <div class="toolbar-group">
-      <button id="btnPlayPause">▶ Play</button>
-      <button id="btnRestart">⟳ Restart</button>
+      <button id="btnPlayPause" title="Run / pause the simulation clock. Clicking a call point auto-starts it — use this to pause, or to run a scripted SIM.requests timeline.">▶ Play</button>
+      <button id="btnRestart" title="Reset: re-park all AGVs at home and reseed the RNG.">⟳ Restart</button>
     </div>
     <div class="toolbar-sep"></div>
     <div class="toolbar-group">
@@ -56,7 +61,7 @@
     <span id="statusBadge" class="status-idle">IDLE</span>
     <span id="stepCounter">step 0 / 0</span>
     <div style="margin-left:auto;display:flex;gap:6px;">
-      <button id="btnRecord">⏺ Record</button>
+      <button id="btnRecord" title="Start recording the canvas to a .webm video. Click again to stop and download. In on-demand mode it runs live until you click Stop.">⏺ Record</button>
       <button id="homeBtn">⌂ Home</button>
     </div>
   </div>

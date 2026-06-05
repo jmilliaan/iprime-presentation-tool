@@ -74,7 +74,11 @@
   <div id="groupBar">
     <span id="groupBarLabel" class="details-label">No active group</span>
     <div class="details-sep"></div>
-    <span class="details-hint">Set home tasks in the group panel · click nodes in order · RClick=undo last</span>
+    <span class="details-label">Stops</span>
+    <button class="track-seg-btn active" id="groupAddBtn">Add</button>
+    <button class="track-seg-btn" id="groupDeleteBtn">Delete</button>
+    <div class="details-sep"></div>
+    <span class="details-hint">Set home tasks in the group panel · click nodes in order · delete mode removes action stops · RClick=undo last</span>
   </div>
 
   <!-- Call mode hint bar -->
@@ -94,7 +98,7 @@
 
   <!-- Group picker (CALL mode: choose which group a call fires) -->
   <div id="groupPicker">
-    <div class="picker-label">Call which group?</div>
+    <div class="picker-label">Map call button to group</div>
     <div id="groupPickerBody"></div>
   </div>
 

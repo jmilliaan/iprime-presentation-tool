@@ -3,8 +3,8 @@
 // Groups (multi-stop jobs) are requested on demand — via on-canvas call markers,
 // a scripted timeline, or a seeded auto-generator. Requests queue FIFO; an idle
 // AGV is dispatched from its home slot to run the group's stops in order and
-// return home. AGVs genuinely wait/yield on shared path corners via a track-point
-// reservation map.
+// return home. Movement-layer collision handling (same-edge tailing + same-node
+// merge priority) lives in animplayer.js; this engine only assigns jobs.
 //
 // Relies on globals from animplayer.js (state, routeWalkerToStep) and shared.js
 // (makeRng). All cross-file access happens at call time, so load order is free.
@@ -17,7 +17,6 @@ const dispatch = {
   calls:       [],           // [{ x, y, group }] — free-floating call buttons
   serviceTime: 3,
   queue:       [],           // FIFO of { group, agv }
-  reserved:    new Map(),    // trackPointId -> agvId holding it
   rng:         Math.random,
   simTime:     0,
   timelineIdx: 0,
@@ -39,14 +38,12 @@ const Dispatch = {
     dispatch.requests     = layout.sim.requests || [];
     dispatch.autoGenerate = layout.sim.autoGenerate;
     dispatch.queue        = [];
-    dispatch.reserved     = new Map();
     dispatch.mode         = (layout.agvs && layout.agvs.length > 0) ? 'dispatch' : 'idle';
     return dispatch.mode === 'dispatch';
   },
 
   reset() {
     dispatch.queue       = [];
-    dispatch.reserved    = new Map();
     dispatch.simTime     = 0;
     dispatch.timelineIdx = 0;
     dispatch.rng         = makeRng(dispatch.autoGenerate.seed);
@@ -67,18 +64,6 @@ const Dispatch = {
     this._fireTimeline();
     this._autoGen();
     this._assign();
-  },
-
-  // ── Reservation API (called from animplayer updateWalker) ─────────────────
-
-  tryReserve(tpId, agvId) {
-    const holder = dispatch.reserved.get(tpId);
-    if (holder === undefined || holder === agvId) { dispatch.reserved.set(tpId, agvId); return true; }
-    return false;
-  },
-
-  release(tpId, agvId) {
-    if (tpId && dispatch.reserved.get(tpId) === agvId) dispatch.reserved.delete(tpId);
   },
 
   // ── Completion / HUD helpers ──────────────────────────────────────────────
@@ -102,6 +87,26 @@ const Dispatch = {
 
   groupIds() { return dispatch.groupOrder.slice(); },
   calls()    { return dispatch.calls; },
+  groupName(groupId) { return dispatch.groups[groupId]?.name || groupId; },
+  queueSnapshot() {
+    return dispatch.queue.map((r, idx) => ({
+      order: idx + 1,
+      group: r.group,
+      name: this.groupName(r.group),
+      agv: r.agv || null,
+      state: 'pending',
+    }));
+  },
+  runningSnapshot() {
+    return state.agvs
+      .filter(w => w.job)
+      .map(w => ({
+        group: w.job,
+        name: this.groupName(w.job),
+        agv: w.id,
+        state: 'running',
+      }));
+  },
 
   // Short status label for one walker (HUD).
   stateLabel(w) {
@@ -132,7 +137,7 @@ const Dispatch = {
       w.homeSlot     = slotId;
       w.agvPos       = node ? { x: node.x, y: node.y } : { x: 40 + i * 50, y: 40 };
       w.agvHeading   = 0;
-      w.currentNode  = slotId;                // node id the AGV is parked at / holding
+      w.currentNode  = slotId;                // node id the AGV is parked at
       w.sequence     = [];
       w.currentStep  = 0;
       w.actionTimer  = 0;
@@ -140,7 +145,6 @@ const Dispatch = {
       w.phase        = 'parked';
       w.job          = null;
       w.waiting      = false;
-      if (w.currentNode) dispatch.reserved.set(w.currentNode, w.id);
     });
   },
 

@@ -45,6 +45,8 @@ const state = {
   pathHistory: [],   // LIFO of {node?,edge?,prevSel} so right-click undoes a whole placement
   // STATION editing
   placeRole: 'action', stationN: 1, homeN: 1,
+  // GROUP editing
+  groupEditMode: 'add',
   // counters
   groupN: 0,
 };
@@ -234,6 +236,7 @@ function setMode(m) {
   groupBar.style.display   = m === 'GROUP'   ? 'flex'  : 'none';
   callBar.style.display    = m === 'CALL'    ? 'flex'  : 'none';
   groupsPanel.style.display = m === 'GROUP'  ? 'block' : 'none';
+  if (m !== 'GROUP') state.groupEditMode = 'add';
   updateGroupBar();
 }
 
@@ -399,14 +402,19 @@ function ensureActiveGroup() {
 }
 function onClickGroup(sx, sy) {
   ensureActiveGroup();
-  // Action station → ask the load. Home stations are excluded from groups.
   const st = hitStation(sx, sy);
   if (st) {
     if (state.stations[st].role === 'home') return;
+    if (state.groupEditMode === 'delete') {
+      removeGroupStopByNode(st);
+      return;
+    }
+    // Action station → ask the load. Home stations are excluded from groups.
     pickTarget = { kind: 'stop', node: st };
     showActionPicker(sx, sy);
     return;
   }
+  if (state.groupEditMode === 'delete') return;
   // Path corner → append as a pass-through (move), no prompt.
   const c = hitCorner(sx, sy);
   if (c) {
@@ -414,21 +422,78 @@ function onClickGroup(sx, sy) {
     updateGroupsPanel();
   }
 }
+function removeGroupStopByNode(nodeId) {
+  const g = state.groups[state.activeGroup];
+  if (!g) return;
+  for (let i = g.stops.length - 1; i >= 0; i--) {
+    if (g.stops[i].node === nodeId && state.stations[nodeId]?.role === 'action') {
+      g.stops.splice(i, 1);
+      updateGroupsPanel();
+      return;
+    }
+  }
+}
 function undoGroupStop() {
   const g = state.groups[state.activeGroup];
   if (g && g.stops.length) { g.stops.pop(); updateGroupsPanel(); }
 }
 function updateGroupBar() {
+  $('groupAddBtn').classList.toggle('active', state.groupEditMode === 'add');
+  $('groupDeleteBtn').classList.toggle('active', state.groupEditMode === 'delete');
   $('groupBarLabel').textContent = state.activeGroup
-    ? `Active group: ${state.activeGroup}  (${state.groups[state.activeGroup].stops.length} stops)`
+    ? `Active group: ${state.groups[state.activeGroup].name || state.activeGroup}  (${state.groups[state.activeGroup].stops.length} stops)`
     : 'No active group — click "+ New group"';
 }
+$('groupAddBtn').addEventListener('click', () => { state.groupEditMode = 'add'; updateGroupBar(); });
+$('groupDeleteBtn').addEventListener('click', () => { state.groupEditMode = 'delete'; hideActionPicker(); updateGroupBar(); });
+// Inline-rename a group: swap its name label for a text input. Renames the
+// display name only — the group ID (G-A …) stays, so CALLS / requests are safe.
+function startRenameGroup(id, g, nameEl) {
+  let finished = false;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = g.name || id;
+  input.placeholder = id;
+  input.style.cssText = 'width:120px;font-family:monospace;font-size:12px;padding:1px 4px;border:1px solid #c0a000;border-radius:4px;background:#fff;color:#1a1a2a;';
+  const commit = () => { if (finished) return; finished = true; const v = input.value.trim(); g.name = v || id; updateGroupsPanel(); };
+  const cancel = () => { if (finished) return; finished = true; updateGroupsPanel(); };
+  input.addEventListener('click', ev => ev.stopPropagation());
+  input.addEventListener('dblclick', ev => ev.stopPropagation());
+  input.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter')  { ev.preventDefault(); commit(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
 function updateGroupsPanel() {
   groupsBody.innerHTML = '';
   for (const [id, g] of Object.entries(state.groups)) {
     const row = document.createElement('div');
     row.className = 'agv-entry' + (id === state.activeGroup ? ' active' : '');
-    row.innerHTML = `<span style="flex:1;">${id}</span><span style="color:#888;">${g.stops.length}</span>`;
+
+    const info = document.createElement('span');
+    info.style.cssText = 'flex:1;display:flex;flex-direction:column;';
+    const nameEl = document.createElement('span');
+    nameEl.textContent = g.name || id;
+    nameEl.title = 'Double-click to rename';
+    nameEl.style.cursor = 'text';
+    nameEl.addEventListener('dblclick', (ev) => { ev.stopPropagation(); startRenameGroup(id, g, nameEl); });
+    const idEl = document.createElement('span');
+    idEl.style.cssText = 'color:#888;font-size:10px;';
+    idEl.textContent = id;
+    info.appendChild(nameEl); info.appendChild(idEl);
+    row.appendChild(info);
+
+    const count = document.createElement('span');
+    count.style.color = '#888';
+    count.textContent = g.stops.length;
+    row.appendChild(count);
+
     const del = document.createElement('span');
     del.textContent = ' ✕'; del.style.cssText = 'cursor:pointer;color:#c33;margin-left:6px;';
     del.addEventListener('click', (ev) => {
@@ -521,11 +586,29 @@ function showActionPicker(sx, sy) {
 }
 function hideActionPicker() { actionPicker.style.display = 'none'; }
 
+function groupActionSummary(group) {
+  const items = group.stops
+    .filter(s => state.stations[s.node]?.role === 'action')
+    .map(s => `${s.node} (${s.action})`);
+  return items.length ? items.join('  ·  ') : 'no action nodes';
+}
+
 function showGroupPicker(sx, sy) {
   groupPickerBody.innerHTML = '';
   Object.keys(state.groups).forEach(id => {
     const b = document.createElement('button');
-    b.textContent = id;
+    const group = state.groups[id];
+    const count = group.stops.filter(s => state.stations[s.node]?.role === 'action').length;
+    b.innerHTML = `
+      <div class="group-pick-card">
+        <div class="group-pick-head">
+          <span class="group-pick-id">${group.name || id}</span>
+          <span class="group-pick-count">${id}</span>
+          <span class="group-pick-count">${count} action ${count === 1 ? 'node' : 'nodes'}</span>
+        </div>
+        <div class="group-pick-summary">${groupActionSummary(group)}</div>
+      </div>
+    `;
     b.addEventListener('click', () => {
       if (pendingCall) state.calls.push({ x: pendingCall.x, y: pendingCall.y, group: id });
       pendingCall = null;
@@ -533,8 +616,6 @@ function showGroupPicker(sx, sy) {
     });
     groupPickerBody.appendChild(b);
   });
-  groupPicker.style.left = `${Math.min(sx, window.innerWidth - 220)}px`;
-  groupPicker.style.top  = `${Math.min(sy, window.innerHeight - 200)}px`;
   groupPicker.style.display = 'block';
 }
 function hideGroupPicker() { groupPicker.style.display = 'none'; }
