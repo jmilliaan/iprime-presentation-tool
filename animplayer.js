@@ -94,46 +94,58 @@ function hasMergePriority(w, o) {
   return w.id < o.id;
 }
 
-// Topology-based collision clamp. `w` is driving the edge fromId→toId. Returns
-// how far it may advance this frame. Only three things block it:
-//   1. Tailing  — another AGV ahead on the SAME edge, same direction → keep a gap.
-//   2. Occupancy — another AGV physically sitting in our target node → stop short.
-//   3. Merge    — another AGV entering our target node from a DIFFERENT edge; if
-//                 it is closer to home it has priority and we wait short of the node.
-// AGVs on different edges (parallel lanes, any direction) are ignored — they may
-// overlap on screen but never wait for each other. Head-on on one edge is out of
-// scope. Returns Infinity when nothing blocks.
-function pathClampLimit(w, fromId, toId, to, dx, dy, len) {
+// The largest following gap we ever need (a leader towing a trolley). Used to
+// decide how far up our own route to look for AGVs in front.
+const MAX_GAP = 8 + TROLLEY_LEN + AGV_SIZE + FOLLOW_MARGIN;
+
+// Topology-based collision clamp. `w` is driving the edge fromId→toId. Returns how
+// far it may advance this frame. An AGV `o` blocks us only when it sits on OUR own
+// route ahead — on one of the upcoming nodes/edges within the following gap (so a
+// leader several short segments up a corridor is still seen). Two outcomes:
+//   • Merge    — o enters our target node from a DIFFERENT edge: the one closer to
+//                home wins; if o wins we wait a gap short of the node, else proceed.
+//   • Tailing / occupancy — otherwise o is ahead on our route → keep a safe
+//                straight-line gap behind it (the gap grows when o tows a trolley).
+// AGVs on other edges (parallel lanes, any direction) share none of our route
+// nodes, so they are ignored — they may overlap on screen but never wait for each
+// other. Head-on on one edge is out of scope. Returns Infinity when nothing blocks.
+function pathClampLimit(w, fromId, toId, dx, dy, len) {
   if (len < 1e-6) return Infinity;
   const ux = dx / len, uy = dy / len;
+
+  // Our route ahead: upcoming sequence nodes out to one max-gap of path length.
+  const ahead = new Set();
+  let acc = 0, prev = w.agvPos;
+  for (let k = w.currentStep; k < w.sequence.length; k++) {
+    const p = nodePos(w.sequence[k]?.node);
+    if (!p) break;
+    ahead.add(w.sequence[k].node);
+    acc += Math.hypot(p.x - prev.x, p.y - prev.y);
+    prev = p;
+    if (acc > MAX_GAP) break;
+  }
+
   let lim = Infinity;
   for (const o of state.agvs) {
     if (o === w || o.phase === 'idle' || o.phase === 'done') continue;
     const oTarget = o.phase === 'moving' ? o.sequence[o.currentStep]?.node : null;
-    const onB = o.currentNode === toId;           // o's last/held node is our target
-    if (!onB && oTarget !== toId) continue;       // o has nothing to do with our target node → ignore
+    if (!ahead.has(o.currentNode) && !(oTarget && ahead.has(oTarget))) continue;  // not on our route → ignore
 
     const need = requiredGapFor(o);
 
-    if (o.currentNode === fromId && oTarget === toId) {
-      // 1. Same edge, same direction → follow with a gap behind o.
-      const rx = o.agvPos.x - w.agvPos.x, ry = o.agvPos.y - w.agvPos.y;
-      const forward = rx * ux + ry * uy;
-      if (forward <= 0) continue;                 // o is behind us on the line
-      lim = Math.min(lim, forward - need);
+    // Merge into our immediate target node from a different edge → priority by steps-to-home.
+    const sameEdge = o.currentNode === fromId && oTarget === toId;
+    if (oTarget === toId && !sameEdge && o.currentNode !== toId) {
+      if (hasMergePriority(w, o)) continue;       // we're closer to home → we go first
+      lim = Math.min(lim, len - need);            // else wait a gap short of the node
       continue;
     }
 
-    const odB = Math.hypot(o.agvPos.x - to.x, o.agvPos.y - to.y);
-    if (onB && odB < need) {
-      // 2. o is sitting in / passing through our target node → stop a gap short.
-      lim = Math.min(lim, len - need);
-    } else if (oTarget === toId && !hasMergePriority(w, o)) {
-      // 3. Merge from another edge and o has priority (closer to home) → wait short.
-      lim = Math.min(lim, len - need);
-    }
-    // else: o is heading to / leaving our node but we have priority, or it has
-    // already cleared the node → we proceed.
+    // Otherwise o is ahead on our route → keep a straight-line gap behind it.
+    const rx = o.agvPos.x - w.agvPos.x, ry = o.agvPos.y - w.agvPos.y;
+    const forward = rx * ux + ry * uy;
+    if (forward <= 0) continue;                   // o is behind us along travel
+    lim = Math.min(lim, forward - need);
   }
   return lim;
 }
@@ -230,7 +242,7 @@ function updateWalker(w, dt) {
     // merges block. Parallel AGVs on other edges are ignored (graphics may
     // overlap — that's fine).
     let limit = state.agvSpeed * dt;
-    limit = Math.min(limit, Math.max(0, pathClampLimit(w, w.currentNode, targetId, to, dx, dy, distToTarget)));
+    limit = Math.min(limit, Math.max(0, pathClampLimit(w, w.currentNode, targetId, dx, dy, distToTarget)));
 
     w.waiting = limit <= 0.05 && distToTarget > 0.6;
 

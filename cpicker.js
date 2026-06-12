@@ -482,6 +482,11 @@ function updateGroupsPanel() {
     nameEl.textContent = g.name || id;
     nameEl.title = 'Double-click to rename';
     nameEl.style.cursor = 'text';
+    // Stop 'click' from bubbling to the row — otherwise each click of a
+    // double-click triggers updateGroupsPanel() (via the row's select
+    // handler), rebuilding the DOM mid-gesture so the native 'dblclick'
+    // never lands on a live element.
+    nameEl.addEventListener('click', (ev) => ev.stopPropagation());
     nameEl.addEventListener('dblclick', (ev) => { ev.stopPropagation(); startRenameGroup(id, g, nameEl); });
     const idEl = document.createElement('span');
     idEl.style.cssText = 'color:#888;font-size:10px;';
