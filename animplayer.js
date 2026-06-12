@@ -11,6 +11,7 @@ const TROLLEY_LEN = 56;   // along the heading (~2× the old length)
 const TROLLEY_WID = 22;   // across
 const CALL_BTN_RADIUS = 13;
 const FOLLOW_MARGIN   = 10;   // image units — breathing room kept behind the AGV ahead
+const LANE_TOL        = AGV_SIZE;   // max perpendicular offset still counted as "same lane"
 
 // Colours for the load-setting action indicator at a stop.
 const LOAD_COLORS = {
@@ -98,29 +99,33 @@ function hasMergePriority(w, o) {
 // decide how far up our own route to look for AGVs in front.
 const MAX_GAP = 8 + TROLLEY_LEN + AGV_SIZE + FOLLOW_MARGIN;
 
-// Topology-based collision clamp. `w` is driving the edge fromId→toId. Returns how
-// far it may advance this frame. An AGV `o` blocks us only when it sits on OUR own
-// route ahead — on one of the upcoming nodes/edges within the following gap (so a
-// leader several short segments up a corridor is still seen). Two outcomes:
+// Geometric collision clamp. `w` is driving the edge fromId→toId. Returns how far
+// it may advance this frame. We build the polyline `w` will actually drive (its
+// live position, then upcoming sequence nodes out to one following-gap of length),
+// and test other AGVs against that physical path rather than against node IDs — so
+// two AGVs nose-to-tail on the same lane block each other even when the lane is
+// drawn with different node IDs, bends, or runs over a free home-leg. Two outcomes:
 //   • Merge    — o enters our target node from a DIFFERENT edge: the one closer to
-//                home wins; if o wins we wait a gap short of the node, else proceed.
-//   • Tailing / occupancy — otherwise o is ahead on our route → keep a safe
-//                straight-line gap behind it (the gap grows when o tows a trolley).
-// AGVs on other edges (parallel lanes, any direction) share none of our route
-// nodes, so they are ignored — they may overlap on screen but never wait for each
-// other. Head-on on one edge is out of scope. Returns Infinity when nothing blocks.
+//                home (fewer steps) wins; if o wins we wait a gap short of the node.
+//   • Tailing / occupancy — o lies AHEAD on our polyline and within LANE_TOL of it
+//                (same physical lane) → keep a safe gap behind it (the gap grows
+//                when o tows a trolley). Parallel lanes (lateral > LANE_TOL) and
+//                AGVs behind us are ignored — they may overlap on screen but never
+//                wait. Head-on on one edge is out of scope. Infinity = nothing blocks.
 function pathClampLimit(w, fromId, toId, dx, dy, len) {
   if (len < 1e-6) return Infinity;
-  const ux = dx / len, uy = dy / len;
 
-  // Our route ahead: upcoming sequence nodes out to one max-gap of path length.
-  const ahead = new Set();
+  // Our lookahead polyline: live position, then upcoming nodes until the accumulated
+  // path length exceeds one max following gap. `base[i]` = path distance to pts[i].
+  const pts = [w.agvPos];
+  const base = [0];
   let acc = 0, prev = w.agvPos;
   for (let k = w.currentStep; k < w.sequence.length; k++) {
     const p = nodePos(w.sequence[k]?.node);
     if (!p) break;
-    ahead.add(w.sequence[k].node);
     acc += Math.hypot(p.x - prev.x, p.y - prev.y);
+    pts.push(p);
+    base.push(acc);
     prev = p;
     if (acc > MAX_GAP) break;
   }
@@ -129,8 +134,6 @@ function pathClampLimit(w, fromId, toId, dx, dy, len) {
   for (const o of state.agvs) {
     if (o === w || o.phase === 'idle' || o.phase === 'done') continue;
     const oTarget = o.phase === 'moving' ? o.sequence[o.currentStep]?.node : null;
-    if (!ahead.has(o.currentNode) && !(oTarget && ahead.has(oTarget))) continue;  // not on our route → ignore
-
     const need = requiredGapFor(o);
 
     // Merge into our immediate target node from a different edge → priority by steps-to-home.
@@ -141,11 +144,24 @@ function pathClampLimit(w, fromId, toId, dx, dy, len) {
       continue;
     }
 
-    // Otherwise o is ahead on our route → keep a straight-line gap behind it.
-    const rx = o.agvPos.x - w.agvPos.x, ry = o.agvPos.y - w.agvPos.y;
-    const forward = rx * ux + ry * uy;
-    if (forward <= 0) continue;                   // o is behind us along travel
-    lim = Math.min(lim, forward - need);
+    // Tailing/occupancy: nearest point on OUR polyline to o, if o is on our lane.
+    let bestD = Infinity;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const ax = pts[i].x, ay = pts[i].y;
+      const ex = pts[i + 1].x - ax, ey = pts[i + 1].y - ay;
+      const segLen2 = ex * ex + ey * ey;
+      if (segLen2 < 1e-9) continue;
+      const tRaw = ((o.agvPos.x - ax) * ex + (o.agvPos.y - ay) * ey) / segLen2;  // 0..1 along seg
+      if (i === 0 && tRaw <= 0) continue;         // o is behind us on the segment we're driving
+      const t = Math.max(0, Math.min(1, tRaw));
+      const px = ax + ex * t, py = ay + ey * t;
+      const lateral = Math.hypot(o.agvPos.x - px, o.agvPos.y - py);
+      if (lateral > LANE_TOL) continue;           // parallel lane → not our line
+      const D = base[i] + Math.sqrt(segLen2) * t; // path distance from w to o's projection
+      if (D < bestD) bestD = D;
+    }
+    if (bestD === Infinity) continue;             // o not on our lane ahead
+    lim = Math.min(lim, bestD - need);
   }
   return lim;
 }
