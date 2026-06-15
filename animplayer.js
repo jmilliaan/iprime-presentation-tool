@@ -12,6 +12,7 @@ const TROLLEY_WID = 22;   // across
 const CALL_BTN_RADIUS = 13;
 const FOLLOW_MARGIN   = 10;   // image units — breathing room kept behind the AGV ahead
 const LANE_TOL        = AGV_SIZE;   // max perpendicular offset still counted as "same lane"
+const HOME_FREE_STEPS = 3;          // nodes before home arrival where collision is disabled (cramped shared run-in)
 
 // Colours for the load-setting action indicator at a stop.
 const LOAD_COLORS = {
@@ -95,6 +96,15 @@ function hasMergePriority(w, o) {
   return w.id < o.id;
 }
 
+// True once the AGV is within the last HOME_FREE_STEPS nodes of its job — the
+// cramped, shared, one-way run-in to its own (private) home slot. Collision is
+// suppressed here: such AGVs neither wait nor are waited-for, so they flow through
+// the home corridor instead of piling up. The drop station before it stays ON
+// because the AGV's currentStep there is still ahead of this threshold.
+function homeFree(w) {
+  return w.job != null && w.currentStep >= w.sequence.length - 1 - HOME_FREE_STEPS;
+}
+
 // The largest following gap we ever need (a leader towing a trolley). Used to
 // decide how far up our own route to look for AGVs in front.
 const MAX_GAP = 8 + TROLLEY_LEN + AGV_SIZE + FOLLOW_MARGIN;
@@ -114,6 +124,7 @@ const MAX_GAP = 8 + TROLLEY_LEN + AGV_SIZE + FOLLOW_MARGIN;
 //                wait. Head-on on one edge is out of scope. Infinity = nothing blocks.
 function pathClampLimit(w, fromId, toId, dx, dy, len) {
   if (len < 1e-6) return Infinity;
+  if (homeFree(w)) return Infinity;   // returning home through the cramped run-in → wait for no one
 
   // Our lookahead polyline: live position, then upcoming nodes until the accumulated
   // path length exceeds one max following gap. `base[i]` = path distance to pts[i].
@@ -133,6 +144,7 @@ function pathClampLimit(w, fromId, toId, dx, dy, len) {
   let lim = Infinity;
   for (const o of state.agvs) {
     if (o === w || o.phase === 'idle' || o.phase === 'done') continue;
+    if (homeFree(o)) continue;          // no one waits for an AGV in its home run-in
     const oTarget = o.phase === 'moving' ? o.sequence[o.currentStep]?.node : null;
     const need = requiredGapFor(o);
 
