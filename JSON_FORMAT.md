@@ -267,8 +267,9 @@ arbitrary points. Understand this or you will misread loop files:
    `[store, n1, n2, …]`.
 3. A machine is only ever visited **if it is a node on that ring.** A `tbm` station that is *not* a
    path node (no edges through it) gets index "infinity" and is **never serviced** — the trolley is
-   loaded but never delivered. (This is why the authoring tool forces machines/store onto path
-   corners.)
+   loaded but never delivered. (This is why the authoring tool, when you drop a machine/store on a
+   line, inserts a corner at that point and splits the edge — so the new station id is always a real
+   ring node, in both `PATH.nodes` and `STATIONS`.)
 4. `edges` therefore must form a **single one-way cycle** through the store and all machines.
 
 So when reading a loop file, reconstruct the ring by following the edges from `SIM.store`, and check

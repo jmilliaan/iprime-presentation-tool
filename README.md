@@ -211,9 +211,10 @@ How it works:
 
 **Authoring (Layout Picker):** draw the loop in **Path** mode (corners + one-way edges forming a single
 cycle), then in **Stations** mode use **Machine** / **Store** to tag corners — for machines, pick the
-**Zone AGV** first so each machine is allocated to a serving AGV. You don't need a pixel-exact click:
-a machine/store **snaps to the nearest path corner** (it must land on a corner so loop routing can reach
-it). Place **Home** wait spots near the store. Saving a layout with machines + a store sets
+**Zone AGV** first so each machine is allocated to a serving AGV. You don't need a corner there: drop a
+machine/store **anywhere along a line** and it **snaps onto the nearest edge**, inserting a corner at
+that point (so loop routing can still reach it — clicking directly on an existing corner reuses it
+instead). Place **Home** wait spots near the store. Saving a layout with machines + a store sets
 `SIM.mode:"loop"` automatically.
 
 A ready example is [`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2 zones,

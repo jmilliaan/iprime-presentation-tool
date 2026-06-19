@@ -210,17 +210,40 @@ function hitStation(sx, sy) {
   }
   return null;
 }
-// Nearest path corner by screen distance (no radius cap). Machines/store snap to
-// this so they stay ring nodes without needing a pixel-exact click. Returns null
-// only when no corners exist yet.
-function nearestCorner(sx, sy) {
-  let best = null, bd = Infinity;
-  for (const [id, p] of Object.entries(state.path.nodes)) {
-    const s = imgToScreen(p.x, p.y, state.view);
-    const d = Math.hypot(sx - s.sx, sy - s.sy);
-    if (d < bd) { bd = d; best = id; }
+// Machines/store must be NODES on the loop ring (loop routing walks PATH edges),
+// yet the user should be able to drop them anywhere along a line. So we snap the
+// click to the nearest point on the nearest edge and SPLIT that edge there,
+// inserting a fresh corner that becomes the machine/store node.
+function projectToSegment(px, py, ax, ay, bx, by) {
+  const ex = bx - ax, ey = by - ay;
+  const len2 = ex * ex + ey * ey;
+  let t = len2 > 0 ? ((px - ax) * ex + (py - ay) * ey) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const x = ax + ex * t, y = ay + ey * t;
+  return { x, y, dist: Math.hypot(px - x, py - y) };
+}
+// Nearest edge to an image-space point, with the projected point on it. null if no edges.
+function nearestEdge(ix, iy) {
+  let best = null;
+  for (const e of state.path.edges) {
+    const A = state.path.nodes[e.from], B = state.path.nodes[e.to];
+    if (!A || !B) continue;
+    const pr = projectToSegment(ix, iy, A.x, A.y, B.x, B.y);
+    if (!best || pr.dist < best.dist) best = { edge: e, x: pr.x, y: pr.y };
   }
   return best;
+}
+// Split `edge` at (x,y) by inserting `newId` as a corner: from→to becomes
+// from→newId and newId→to (direction + arc params preserved, so the one-way ring
+// stays intact).
+function splitEdgeAt(edge, x, y, newId) {
+  state.path.nodes[newId] = { x: Math.round(x), y: Math.round(y) };
+  const idx = state.path.edges.indexOf(edge);
+  const common = { type: edge.type };
+  if (edge.type === 'arc') { common.radius = edge.radius; common.clockwise = edge.clockwise; }
+  const e1 = { id: nextEdgeId(), from: edge.from, to: newId, ...common };
+  const e2 = { id: nextEdgeId(), from: newId, to: edge.to, ...common };
+  state.path.edges.splice(idx, 1, e1, e2);
 }
 
 // ── Naming ──────────────────────────────────────────────────────────────────
@@ -409,7 +432,7 @@ function updateStationBar() {
   }
   const hint = $('stHint');
   if (hint) hint.textContent = (state.placeRole === 'tbm' || state.placeRole === 'store')
-    ? 'Click near the loop — snaps to the nearest path corner · RClick=undo'
+    ? 'Click anywhere on a path line — drops it there (splits the line) · RClick=undo'
     : 'Click=place (auto-links to nearest corner) · RClick=undo';
 }
 
@@ -419,8 +442,17 @@ function onClickStation(sx, sy) {
   // Machines/store sit ON the loop, so they tag an existing path corner (keeping
   // the id in both PATH.nodes and STATIONS — the loop-ring convention).
   if (role === 'tbm' || role === 'store') {
-    const cid = nearestCorner(sx, sy);
-    if (!cid) { alert('Draw the loop in Path mode first — machines/store snap to the nearest path corner.'); return; }
+    // Reuse an existing corner if the click lands on one; otherwise snap onto the
+    // nearest line, creating a corner there (splitting that edge) so the machine/
+    // store is a real ring node wherever it's dropped.
+    let cid = hitCorner(sx, sy);
+    if (!cid) {
+      const { ix, iy } = toImg(sx, sy);
+      const hit = nearestEdge(ix, iy);
+      if (!hit) { alert('Draw the loop in Path mode first — machines/store snap onto the nearest path line.'); return; }
+      cid = nextCornerId();
+      splitEdgeAt(hit.edge, hit.x, hit.y, cid);
+    }
     const p = state.path.nodes[cid];
     if (role === 'store') {
       for (const id of Object.keys(state.stations))
@@ -430,6 +462,7 @@ function onClickStation(sx, sy) {
       const agv = state.zoneAgv || (state.agvs[0] && state.agvs[0].id) || null;
       state.stations[cid] = { x: p.x, y: p.y, role: 'tbm', agv };
     }
+    updatePathBar();
     updateHud();
     return;
   }
