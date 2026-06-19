@@ -210,6 +210,18 @@ function hitStation(sx, sy) {
   }
   return null;
 }
+// Nearest path corner by screen distance (no radius cap). Machines/store snap to
+// this so they stay ring nodes without needing a pixel-exact click. Returns null
+// only when no corners exist yet.
+function nearestCorner(sx, sy) {
+  let best = null, bd = Infinity;
+  for (const [id, p] of Object.entries(state.path.nodes)) {
+    const s = imgToScreen(p.x, p.y, state.view);
+    const d = Math.hypot(sx - s.sx, sy - s.sy);
+    if (d < bd) { bd = d; best = id; }
+  }
+  return best;
+}
 
 // ── Naming ──────────────────────────────────────────────────────────────────
 
@@ -397,7 +409,7 @@ function updateStationBar() {
   }
   const hint = $('stHint');
   if (hint) hint.textContent = (state.placeRole === 'tbm' || state.placeRole === 'store')
-    ? 'Click a PATH corner to tag it (draw the loop in Path mode first) · RClick=undo'
+    ? 'Click near the loop — snaps to the nearest path corner · RClick=undo'
     : 'Click=place (auto-links to nearest corner) · RClick=undo';
 }
 
@@ -407,8 +419,8 @@ function onClickStation(sx, sy) {
   // Machines/store sit ON the loop, so they tag an existing path corner (keeping
   // the id in both PATH.nodes and STATIONS — the loop-ring convention).
   if (role === 'tbm' || role === 'store') {
-    const cid = hitCorner(sx, sy);
-    if (!cid) { alert('Place machines/store on a path corner — draw the loop in Path mode first.'); return; }
+    const cid = nearestCorner(sx, sy);
+    if (!cid) { alert('Draw the loop in Path mode first — machines/store snap to the nearest path corner.'); return; }
     const p = state.path.nodes[cid];
     if (role === 'store') {
       for (const id of Object.keys(state.stations))

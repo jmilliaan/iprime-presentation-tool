@@ -29,15 +29,21 @@ A layout is built from four layers:
 At playback, requests (from call points, a scripted timeline, or a seeded auto-generator) queue
 **FIFO**; any idle AGV is dispatched, drives straight from **its own home** to the group's first node,
 runs the explicit route, and returns to its home. AGVs **face their direction of travel** automatically.
-Collisions are handled by **topology, not proximity** — an AGV only waits for another in two cases:
+Collisions are handled **geometrically**, not by node IDs: each moving AGV looks ahead along the actual
+polyline it will drive (its live position plus its upcoming nodes, out to one max following-gap) and
+checks every other AGV's distance to that line. It waits in two cases:
 
-- **Tailing** — both on the **same edge, same direction**: the follower keeps a safe gap (larger when
-  the leader is towing a trolley) and never rams it.
-- **Merge** — both **entering the same node** from different edges: the one **closer to home** (fewer
-  steps left in its job) goes first; the other waits just short of the node.
+- **Tailing / occupancy** — another AGV lies **ahead on the same lane** (within roughly one AGV-width
+  laterally of the line being driven): the follower keeps a safe gap behind it (larger when the leader
+  tows a trolley or a 2-trolley train) and never rams it.
+- **Merge** — another AGV is **entering the same target node from a different edge**: the one **closer to
+  home** (fewer steps left in its job) goes first; the other waits a gap short of the node.
 
-AGVs on **different edges never block each other** — parallel lanes pass freely, even when running
-opposite ways or overlapping on screen. (Two AGVs sent **head-on down a single edge** is unsupported.)
+Because the test is lateral distance, parallel lanes pass freely **as long as they stay more than ~one
+AGV-width apart** — two paths that actually overlap on screen along the same line *will* queue. As an
+exception, an AGV in the **last few nodes of its run home** (the cramped, shared run-in to its private
+home slot) suppresses collision entirely — it neither waits nor is waited for, so the home corridor
+doesn't pile up. (Two AGVs sent **head-on down a single edge** is still unsupported.)
 The towed **trolley** is drawn by load — `none` (no trolley), `empty` (hollow), `full` (solid + cargo box).
 
 ---
@@ -71,7 +77,9 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 
 - **Path:** click empty space to drop a corner (it chains from the selected one); click a corner to
   select/connect; `A` toggles arc, with radius + CW/CCW controls; right-click undoes.
-- **Stations:** toggle **Action / Home**, then click to place them on the path.
+- **Stations:** toggle **Action / Home**, then click to place them on the path. The same bar also has
+  **Machine / Store** (with a **Zone** AGV selector) for authoring loop-mode layouts — see *Loop-dispatch
+  mode* below.
 - **Groups:** pick/create the active group (right panel), then click nodes in travel order. Clicking a
   **path corner** appends a pass-through; clicking an **action station** asks for the load (none/empty/
   full). Toggle **Add / Delete** in the group bar to add stops or remove an action stop by clicking it.
@@ -93,6 +101,7 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 | ⟳ Restart | Reset to the start (re-parks AGVs, reseeds RNG) |
 | Speed | Playback time multiplier (0.25×–4×) |
 | AGV px/s | Movement speed |
+| Action dur (s) | Default dwell at a stop when the stop sets no explicit `dwell` |
 | Grid / Labels | Overlays |
 | **Auto-call** | Toggle the seeded random request generator |
 | ⏺ Record | Capture as `.webm` (Chrome / Edge) |
@@ -111,6 +120,10 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 ---
 
 ## JSON schema
+
+> For a deep, standalone walk-through of the file format — every field, both engine modes, the
+> loop-ring convention, normalisation/defaults, invariants, and worked readings of both samples — see
+> [`JSON_FORMAT.md`](JSON_FORMAT.md). The summary below is the quick reference.
 
 ```jsonc
 {
@@ -143,12 +156,12 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 | Section | Notes |
 |---------|-------|
 | `PATH.nodes / edges` | Corners and their straight/arc connections — a drawn guide for clicking. |
-| `STATIONS[].role` | `home` (parking slot) or `action`. Position only — no path link. |
-| `GROUPS[].stops[]` | Explicit ordered nodes: `{ node, action }` (+ optional `dwell`, `label`). `action` ∈ `move \| none \| empty \| full` (sets the towed-trolley load; `move` = pass-through). `node` is a path corner or a station; home is excluded. |
+| `STATIONS[].role` | `action` (group-mode load-setting stop), `home` (parking slot), `tbm` (loop-mode machine; carries `agv` = its serving AGV/zone), or `store` (loop-mode load/unload point). Position only — no path link. Unknown roles fall back to `action`. |
+| `GROUPS[].stops[]` | Explicit ordered nodes: `{ node, action }` (+ optional `dwell`, `label`, and `mode:"manual"` to draw a person at the stop). `action` ∈ `move \| none \| empty \| full` (sets the towed-trolley load; `move` = pass-through). `node` is a path corner or a station; home is excluded. |
 | `GROUPS[].homeStart / homeEnd` | Optional action at the assigned AGV's own home (before leaving / on return): `none \| attach-empty \| attach-full \| detach-empty \| detach-full`. |
 | `CALLS[]` | `{ x, y, group }` → a free-floating on-canvas call button. |
 | `HOME.slots[]` | Home-station ids, one slot per AGV (**#AGVs = #home slots**; AGV *i* parks at slot *i*). |
-| `SIM` | Playback config: speed, service time, request timeline, auto-generator. |
+| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`. Loop mode adds `mode:"loop"`, `store` (store node id), `trainSize` (trolleys per train, default 2), and `pairTimeout` (seconds a lone call waits before a single trip, default 200). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
 
 > Legacy files using `CALL_STATIONS` and `pickup/release/exchange` still load (converted automatically).
 > Note: old `homeStart/homeEnd` values (`empty`/`full`/`none`) are **not** migrated — re-pick them as
@@ -159,20 +172,22 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 >
 > **Layout tips:** the AGV drives *straight between clicked nodes*, so click corners along the route you
 > want (a clicked arc edge is cut as a chord — add corners to follow a curve). Each AGV's home→first-node
-> and last-node→home legs are straight too, so place homes near where routes begin. AGVs only queue
-> where routes **share a node** (tailing on one edge, or merging into a node); parallel routes on
-> **separate edges run freely**, so spurs off a hub keep different jobs from waiting on each other. Avoid
-> sending two AGVs **head-on along a single edge** (opposite directions on the same two nodes) — that
-> case is unsupported and can deadlock; use separate lanes or a one-way loop instead.
+> and last-node→home legs are straight too, so place homes near where routes begin. AGVs queue only when
+> one runs **ahead on the same physical lane** (tailing) or two **merge into the same node**; lanes more
+> than ~one AGV-width apart run freely, so keeping parallel routes visually separated stops different jobs
+> from waiting on each other. Avoid sending two AGVs **head-on along a single edge** (opposite directions
+> on the same two nodes) — that case is unsupported and can deadlock; use separate lanes or a one-way
+> loop instead.
 
 ---
 
 ## Loop-dispatch mode (TBM trolley system)
 
 Alongside the default **group/FIFO** model, a layout can opt into **loop mode** — a simulation of the
-factory trolley-dispatch system: machines on a **one-way loop**, AGVs that tow **two trolleys as a
-train**, and **zoned pairing**. The player picks the engine automatically from the layout
-(`SIM.mode: "loop"`); everything else (play/pause, recording, geometric collision) is shared.
+factory trolley-dispatch system: machines on a **one-way loop**, AGVs that tow a **train of trolleys**
+(2 by default, set via `SIM.trainSize`), and **zoned pairing**. The player picks the engine
+automatically from the layout (`SIM.mode: "loop"`); everything else (play/pause, recording, geometric
+collision) is shared.
 
 How it works:
 
@@ -196,8 +211,10 @@ How it works:
 
 **Authoring (Layout Picker):** draw the loop in **Path** mode (corners + one-way edges forming a single
 cycle), then in **Stations** mode use **Machine** / **Store** to tag corners — for machines, pick the
-**Zone AGV** first so each machine is allocated to a serving AGV. Place **Home** wait spots near the
-store. Saving a layout with machines + a store sets `SIM.mode:"loop"` automatically.
+**Zone AGV** first so each machine is allocated to a serving AGV. You don't need a pixel-exact click:
+a machine/store **snaps to the nearest path corner** (it must land on a corner so loop routing can reach
+it). Place **Home** wait spots near the store. Saving a layout with machines + a store sets
+`SIM.mode:"loop"` automatically.
 
 A ready example is [`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2 zones,
 a store and 2 AGVs.

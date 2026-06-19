@@ -1,0 +1,380 @@
+# Reading iPrime Layout JSON — Technical Reference
+
+> **Audience:** an engineer (or LLM) who has *never seen this codebase* and is handed one of its
+> `.json` files. Goal: be able to fully read, validate, and mentally simulate a layout file without
+> running anything. This document is self-contained.
+
+---
+
+## 1. What these files are
+
+The iPrime Presentation Tool is a browser-based AGV (Automated Guided Vehicle) simulator. A human
+draws a factory floor layout in a "Layout Picker" and saves it as a JSON file (often `coords.json`).
+An "Animation Player" loads that JSON and animates AGVs (little robots) driving routes, towing
+trolleys, and serving stations — for making recorded demo videos.
+
+So a layout JSON is a **complete declarative description of a simulation**: the track geometry, the
+robots, the jobs they can do, and a script of when work arrives. There is **no code in the file** —
+just data. Everything below describes how that data is interpreted.
+
+There are **two distinct simulation engines**, and a single field (`SIM.mode`) picks which one a file
+targets:
+
+| Mode | `SIM.mode` | What it models | Key sections used |
+|------|-----------|----------------|-------------------|
+| **Group / FIFO** (default) | absent or anything ≠ `"loop"` | On-demand multi-stop delivery jobs, dispatched FIFO to idle AGVs | `GROUPS`, `CALLS`, `STATIONS(action/home)` |
+| **Loop / zoned-pairing** | `"loop"` | Machines on a one-way loop; AGVs tow a train of trolleys; calls are paired per zone | `STATIONS(tbm/store)`, `TROLLEY_TYPES`, loop fields in `SIM` |
+
+A file is almost always *one or the other*. Identify the mode first; it changes how you read
+`STATIONS` and `SIM.requests`.
+
+---
+
+## 2. Coordinate system & units
+
+- All positions (`x`, `y`) are in **image-space pixels** of the (optional) floor-plan background.
+- **Origin is top-left. `x` grows right, `y` grows DOWN** (standard HTML canvas convention, *not*
+  math convention).
+- **Headings** (not stored in the file, but used at runtime) are degrees measured `atan2(dy, dx)`:
+  `0°` = pointing right (+x), `90°` = pointing **down** (+y), `180°` = left, `270°` = up.
+- **Time** (`SIM.requests[].t`, `serviceTime`, `pairTimeout`) is in **seconds** of simulated time.
+- **Speed** (`SIM.agvSpeed`) is in **pixels per second**.
+
+---
+
+## 3. Top-level shape
+
+```jsonc
+{
+  "PATH":          { "nodes": {…}, "edges": [...] },
+  "STATIONS":      { …id → {x,y,role,…} },
+  "AGVS":          [ {id,color}, … ],
+  "TROLLEY_TYPES": [ {id,name,color}, … ],   // optional; loop mode only
+  "GROUPS":        { …id → {name,stops,homeStart,homeEnd} },   // group mode
+  "CALLS":         [ {x,y,group}, … ],        // group mode
+  "HOME":          { "slots": [stationId, …] },
+  "SIM":           { …playback config + request script }
+}
+```
+
+Every section is **optional and defaulted** by the loader — a partial file still loads. Missing
+arrays/objects become empty; bad cross-references are silently dropped (see §10). Do not assume a
+field is present; assume the loader filled a default.
+
+---
+
+## 4. Section-by-section reference
+
+### 4.1 `PATH` — the drawn track (geometry only)
+
+```jsonc
+"PATH": {
+  "nodes": { "P-1": { "x": 200, "y": 300 }, … },
+  "edges": [
+    { "id": "E-1", "from": "P-1", "to": "P-H", "type": "straight" },
+    { "id": "E-2", "from": "P-H", "to": "P-4", "type": "arc", "radius": 120, "clockwise": true }
+  ]
+}
+```
+
+- `nodes` is a map of **corner id → point**. These are the geometric vertices of the track.
+- `edges` connect two corners. `type` is `"straight"` or `"arc"`; arcs add `radius` and `clockwise`
+  (visual clockwise in y-down space).
+- **CRITICAL — edges are a visual guide, not a movement constraint.** AGVs always drive in **straight
+  lines between consecutive nodes** of their route. A drawn arc edge is *only rendered* as a curve;
+  the robot cuts it as a chord. So `type/radius/clockwise` never affect motion or timing — they are
+  cosmetic. (To make an AGV follow a curve, the author adds more corners along it.)
+- Edges whose `from`/`to` is not in `nodes` are dropped by the loader.
+- Defaults applied if omitted: `type` → `straight`, `radius` → `100`, `clockwise` → `true`.
+- In **loop mode**, edges additionally define the **one-way cycle** the ring router walks (see §6),
+  so there `from→to` direction is meaningful.
+
+### 4.2 `STATIONS` — points where something happens
+
+```jsonc
+"STATIONS": {
+  "HS-1": { "x": 175, "y": 180, "role": "home" },
+  "LA":   { "x": 848, "y": 180, "role": "action" },
+  "M1":   { "x": 220, "y": 120, "role": "tbm", "agv": "AGV-01" },
+  "ST":   { "x": 120, "y": 400, "role": "store" }
+}
+```
+
+A station is a named point with a **`role`** that determines its behavior. There are exactly four
+valid roles; an unknown role falls back to `"action"`.
+
+| `role` | Mode | Meaning |
+|--------|------|---------|
+| `action` | group | A stop where the AGV **sets its towed-trolley load** (to none/empty/full). Placed freely anywhere. |
+| `home` | both | A **parking / wait slot**, one per AGV. Listed in `HOME.slots`. Excluded from group routes; added per-AGV automatically. Placed freely. |
+| `tbm` | loop | A **machine** (demand point) on the loop. Carries `agv` = the **serving AGV**, which defines its **zone**. |
+| `store` | loop | The single **load/unload** point of the loop. Exactly one per loop layout. |
+
+Notes:
+- Only `tbm` stations carry an `agv` field (zone allocation). Other roles ignore it.
+- **A `tbm`/`store` station id usually equals a `PATH.nodes` id** — the same id appears in *both*
+  `PATH.nodes` and `STATIONS`. This is intentional and load-bearing; see §6 ("loop-ring convention").
+- `action`/`home` station ids are independent of path corners (e.g. `HS-1`, `LA`) and are *not* on the
+  path graph — the AGV just drives straight to their coordinates.
+
+### 4.3 `AGVS` — the robots
+
+```jsonc
+"AGVS": [ { "id": "AGV-01", "color": "#E63946" }, … ]
+```
+
+Identity + render colour only. The number of AGVs should equal the number of `HOME.slots`
+(**AGV index *i* parks at `HOME.slots[i]`**). Defaults: `id` → `AGV-0{i+1}`, `color` → a rotating
+palette (`#E63946, #4080e0, #1a9c50, #cc44aa`).
+
+### 4.4 `TROLLEY_TYPES` — loop mode only (optional)
+
+```jsonc
+"TROLLEY_TYPES": [ { "id": "TT-1", "name": "Type 1", "color": "#E63946" }, … ]
+```
+
+The catalogue of empty-trolley types a machine can request. If omitted, a **default 6-type palette**
+is used. Referenced by `SIM.requests[].type` (loop mode). Ignored in group mode.
+
+### 4.5 `GROUPS` — reusable jobs (group mode)
+
+```jsonc
+"GROUPS": {
+  "G-A": {
+    "name": "Deliver to A",
+    "homeStart": "attach-full",
+    "homeEnd":   "none",
+    "stops": [
+      { "node": "P-H", "action": "move" },
+      { "node": "P-4", "action": "move" },
+      { "node": "LA",  "action": "none" },
+      { "node": "P-4", "action": "move" },
+      { "node": "P-H", "action": "move" }
+    ]
+  }
+}
+```
+
+A group is an **explicit, ordered list of nodes to visit** — there is **no pathfinding**. The AGV
+goes to each `stop.node` in order, straight-line between them.
+
+- **The key (`"G-A"`) is the group's stable ID** used by `CALLS` and `SIM.requests`. `name` is just a
+  human label and may be renamed without breaking references.
+- `stops[].node` is a **path corner OR a station id**. Stops referencing nonexistent nodes are dropped.
+- `stops[].action` — what the AGV does on arrival. After normalization it is one of:
+
+  | `action` | Effect |
+  |----------|--------|
+  | `move` | Pass-through; no load change; **dwell 0**. |
+  | `none` | Set towed load to **none** (drop trolley). |
+  | `empty` | Set towed load to **empty** trolley. |
+  | `full` | Set towed load to **full** trolley. |
+
+  The load is a *latched state*: once a stop sets `full`, the AGV tows a full trolley until a later
+  stop changes it.
+- `stops[].dwell` *(optional, seconds)* — explicit pause at this stop; overrides the default. If
+  absent, dwell = `0` for `move`, else `SIM.serviceTime`.
+- `stops[].label` *(optional)* — text shown above the AGV during the stop.
+- `stops[].mode: "manual"` *(optional)* — draws a little "person" figure at the stop (a human-handled
+  step). Cosmetic.
+- `homeStart` / `homeEnd` — an optional action performed at the **AGV's own home**, before leaving /
+  on return. One of `none | attach-empty | attach-full | detach-empty | detach-full` (default `none`).
+  `attach-*` hooks up a trolley before departure; `detach-*` drops it on return.
+
+**Home is never listed in `stops`.** The dispatcher wraps each job as:
+`[home (homeStart)] → stops… → [home (homeEnd)]`, using whichever home slot the assigned AGV owns.
+
+### 4.6 `CALLS` — on-canvas call buttons (group mode)
+
+```jsonc
+"CALLS": [ { "x": 852, "y": 130, "group": "G-A" } ]
+```
+
+A free-floating clickable button at `(x,y)` that, when clicked in the player, enqueues a request for
+`group`. `group` must be a valid key of `GROUPS` (else dropped). Purely an *input device* — it does
+not constrain routing.
+
+### 4.7 `HOME` — parking slot assignment
+
+```jsonc
+"HOME": { "slots": ["HS-1", "HS-2", "HS-3"] }
+```
+
+An ordered list of **`home`-role station ids**. **AGV *i* parks at `slots[i]`.** Invalid ids are
+filtered out. Should have the same length as `AGVS` (if shorter, extra AGVs fall back to the last
+slot).
+
+### 4.8 `SIM` — playback config + request script
+
+Shared fields:
+
+```jsonc
+"SIM": {
+  "agvSpeed": 120,        // px/s            (default 120)
+  "serviceTime": 3,       // s dwell at action/swap/load/unload stops (default 3)
+  "requests": [ … ],      // scripted timeline (see below)
+  "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
+}
+```
+
+- `requests` is a **time-ordered script** of work. Its element shape **depends on mode**:
+  - **Group mode:** `{ "t": <sec>, "group": "G-A", "agv": "AGV-01"? }` — at time `t`, enqueue group
+    `G-A`. Optional `agv` **pins** it to a specific AGV (only that AGV may serve it; strict FIFO means
+    the queue head will *wait* for that AGV). Entries with unknown `group` are dropped; list is sorted
+    by `t`.
+  - **Loop mode:** `{ "t": <sec>, "machine": "M2", "type": "TT-1" }` — at time `t`, a call for
+    machine `M2` requesting empty trolley type `TT-1`. Entries whose `machine` is not a `tbm` station
+    are dropped; an invalid/missing `type` falls back to the first trolley type; sorted by `t`.
+- `autoGenerate` — a **seeded random** request generator (Poisson-ish via `meanInterval`). When
+  `enabled`, the player can spawn random requests; `seed` makes it reproducible. When using a scripted
+  `requests` timeline for a deterministic recording, this is normally `enabled:false`.
+
+**Loop-mode-only `SIM` fields:**
+
+```jsonc
+"mode": "loop",
+"store": "ST",          // store node id (load/unload point)
+"trainSize": 2,         // trolleys per train / max calls paired per trip (default 2)
+"pairTimeout": 200      // s a lone call waits before going as a single-trolley trip (default 200)
+```
+
+---
+
+## 5. Determining the mode (do this first)
+
+The loader sets mode purely from the flag: **`mode = (SIM.mode === "loop") ? "loop" : "group"`.**
+
+- It does **not** infer loop mode just because `tbm`/`store` stations exist. A file with machines but
+  no `SIM.mode:"loop"` is treated as **group mode** (and those machines are effectively inert).
+- Files saved by the Layout Picker set `SIM.mode:"loop"` (and `SIM.store`) automatically whenever the
+  layout contains machines + a store. Hand-authored loop files **must** include `SIM.mode:"loop"`.
+
+For a loop file to actually *run*, the loop engine additionally requires: a valid `store`, a non-empty
+ring built from it, at least one machine, and at least one AGV. If any are missing it goes inert.
+
+---
+
+## 6. The loop-ring convention (critical for loop files)
+
+Loop mode routes by **walking the `PATH` graph as a directed cycle**, not by straight lines between
+arbitrary points. Understand this or you will misread loop files:
+
+1. **Machines and the store are simultaneously `PATH.nodes` AND `STATIONS`** — the *same id* in both.
+   E.g. in a loop file you'll see `"M1"` under `PATH.nodes` *and* `"M1"` under `STATIONS` with
+   `role:"tbm"`. This is required so the machine is a vertex the ring can pass through.
+2. The router starts at `store` and follows `edges` (`from → to`), always preferring an unvisited
+   successor, until the cycle closes. This yields an **ordered ring** of node ids:
+   `[store, n1, n2, …]`.
+3. A machine is only ever visited **if it is a node on that ring.** A `tbm` station that is *not* a
+   path node (no edges through it) gets index "infinity" and is **never serviced** — the trolley is
+   loaded but never delivered. (This is why the authoring tool forces machines/store onto path
+   corners.)
+4. `edges` therefore must form a **single one-way cycle** through the store and all machines.
+
+So when reading a loop file, reconstruct the ring by following the edges from `SIM.store`, and check
+every `tbm` id appears in it.
+
+---
+
+## 7. What the loader normalizes / defaults (read JSON *as the app sees it*)
+
+The file is passed through a normalizer before use. To read a file the way the app does, apply these:
+
+- **PATH.edges:** drop edges with missing endpoints; `type→straight`, `radius→100`, `clockwise→true`
+  defaults.
+- **STATIONS:** clamp `role` to `action|home|tbm|store` (else `action`); keep `agv` only for `tbm`.
+- **AGVS:** fill `id`/`color` defaults.
+- **TROLLEY_TYPES:** default 6-type palette if absent/empty.
+- **GROUPS.stops:** drop stops whose `node` doesn't exist; map `action` to `move|none|empty|full`
+  (see §9 for legacy verbs); keep `dwell` only if numeric; keep `label`; keep `mode` only if
+  `"manual"`.
+- **GROUPS.homeStart/homeEnd:** clamp to the 5 valid home actions, else `none` (see §9 legacy note).
+- **CALLS:** keep only those with a valid `group` and numeric `x,y`.
+- **HOME.slots:** keep only ids that are real stations.
+- **SIM:** `agvSpeed→120`, `serviceTime→3`, `trainSize→2`, `pairTimeout→200`,
+  `autoGenerate.meanInterval→6`, `autoGenerate.seed→1234`; resolve `store` (use `SIM.store` if it's a
+  valid store station, else the first `store` station found, else null); parse `requests` per mode.
+
+---
+
+## 8. Invariants & cross-references to verify
+
+When validating a file, check:
+
+- `len(AGVS) == len(HOME.slots)` (AGV *i* ↔ slot *i*). Mismatch isn't fatal but parks AGVs oddly.
+- Every `HOME.slots[i]` is a `home`-role station.
+- Every `CALLS[].group` and every group-mode `requests[].group` is a key of `GROUPS`.
+- Every `GROUPS[].stops[].node` is a `PATH.nodes` id or a `STATIONS` id.
+- **Loop:** exactly one `store`; `SIM.store` matches it; every `tbm` has a valid `agv` that exists in
+  `AGVS`; every `tbm` and the `store` are reachable on the ring (§6); `edges` form one directed cycle.
+- **Loop:** `requests[].machine` is a `tbm`; `requests[].type` is a `TROLLEY_TYPES` id.
+
+---
+
+## 9. Legacy / migration gotchas
+
+Older files still load (auto-converted), so you may encounter:
+
+- **`CALL_STATIONS`** (instead of `CALLS`): `[{station, group}]` anchored to a station — converted to
+  free-floating `CALLS` using that station's position.
+- **Old stop verbs** `pickup` / `exchange` → mapped to `full`; `release` → mapped to `none`.
+- **Old `homeStart`/`homeEnd` values** `"empty"` / `"full"` — these are **NOT** migrated to the new
+  `attach-*`/`detach-*` vocabulary. Since they aren't valid home actions, they normalize to `none`
+  (i.e., silently become "do nothing"). Watch for this in older group files (e.g. `homeStart:"full"`
+  reads as `none`). `null` likewise becomes `none`.
+
+---
+
+## 10. Worked reading — a group/FIFO file
+
+Given (abridged from `sample_dispatch.json`):
+
+- `PATH`: a hub `P-H` with three spurs in (`P-1/2/3 → P-H`) and three out (`P-H → P-4/5/6`).
+- `STATIONS`: homes `HS-1/2/3` (left), action sites `LA/LB/LC` (right).
+- `AGVS`: 3 robots; `HOME.slots = [HS-1, HS-2, HS-3]` → AGV-01@HS-1, etc.
+- `GROUPS.G-A`: `homeStart:"full"` (legacy → reads as **none**), stops
+  `P-H, P-4, LA(none), P-4, P-H`.
+- `SIM`: `agvSpeed 160`, `serviceTime 3`, scripted `requests` firing G-A/B/C/AB at t=1..4, then a
+  **pinned** `{t:70, group:"G-A", agv:"AGV-01"}`.
+
+How it runs: at t=1 the request for `G-A` enqueues; the first idle AGV (AGV-01) is dispatched. Its
+full sequence becomes `HS-1 → P-H → P-4 → LA(set load none) → P-4 → P-H → HS-1`. It dwells 3 s at
+`LA` (serviceTime), 0 s at `move` nodes. Meanwhile G-B/G-C go to AGV-02/03. At t=70 the pinned G-A
+request will only be served by AGV-01 (others wait behind it in FIFO).
+
+## 11. Worked reading — a loop file
+
+Given (abridged from `sample_loop.json`):
+
+- `PATH` nodes form one cycle: `ST → A → M1 → M2 → M3 → M4 → B → C → M5 → M6 → M7 → M8 → D → ST`.
+- `STATIONS`: `ST` is `store`; `M1..M4` are `tbm` served by **AGV-01** (zone 1); `M5..M8` are `tbm`
+  served by **AGV-02** (zone 2); `HS1/HS2` are homes.
+- `SIM`: `mode:"loop"`, `store:"ST"`, `pairTimeout:200`, 6 trolley types; scripted calls at t=1..4 on
+  M2/M4 (zone 1) and M6/M8 (zone 2).
+
+How it runs: the ring is built from `ST` following the edges. Calls bucket by zone. Zone 1 gets calls
+for M2 (TT-1) and M4 (TT-3); once it has 2, AGV-01 dispatches a paired trip. Stops are ordered by ring
+position (M2 before M4), the train is loaded **rear = first stop (M2), front = second (M4)**, and the
+route is `ST(load) → … → M2(swap) → … → M4(swap) → … → ST(unload) → HS1`. Zone 2 does the same with
+AGV-02 for M6/M8. A lone call with no partner would wait up to `pairTimeout` (200 s) then go as a
+single-trolley trip.
+
+---
+
+## 12. Predicting runtime behavior from a file (summary)
+
+1. **Mode** = `SIM.mode === "loop"` ? loop : group.
+2. **Geometry**: positions are y-down pixels; AGVs move in **straight lines between consecutive route
+   nodes**; arc edges are cosmetic.
+3. **Group mode**: `requests`/`CALLS`/auto-gen feed a **FIFO queue**; each idle AGV runs
+   `home → group.stops → home` with its own home slot; `agv`-pinned requests are head-of-line
+   blocking. `action` stops latch the towed-trolley load; dwell = `dwell` or `serviceTime` (0 for
+   `move`).
+4. **Loop mode**: calls = `(machine, type)`; each machine's `agv` is its **zone**; per zone the engine
+   **pairs 2 calls** (or sends a single after `pairTimeout`), ordered by **ring position**, train
+   loaded rear=first/front=second, routed `store → stops → store → home`. An AGV toggled "down"
+   funnels its zone to a live AGV.
+5. **Determinism**: motion + the seeded RNG mean that, with a scripted `requests` timeline and
+   `autoGenerate.enabled=false`, a recording is byte-for-byte reproducible.
+6. **Timing**: travel time per leg = `distance / agvSpeed`; add `serviceTime` (or explicit `dwell`)
+   at each non-`move` stop.
