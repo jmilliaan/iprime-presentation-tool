@@ -3,6 +3,17 @@
 const AGV_COLORS = ['#E63946', '#4080e0', '#1a9c50', '#cc44aa'];
 const HOME_ACTIONS = ['none', 'attach-empty', 'attach-full', 'detach-empty', 'detach-full'];
 
+// Loop-dispatch mode (TBM trolley system). Six empty-trolley types; a call button
+// selects the type to deliver. Default palette used when a layout omits TROLLEY_TYPES.
+const DEFAULT_TROLLEY_TYPES = [
+  { id: 'TT-1', name: 'Type 1', color: '#E63946' },
+  { id: 'TT-2', name: 'Type 2', color: '#4080e0' },
+  { id: 'TT-3', name: 'Type 3', color: '#1a9c50' },
+  { id: 'TT-4', name: 'Type 4', color: '#cc44aa' },
+  { id: 'TT-5', name: 'Type 5', color: '#e08a1e' },
+  { id: 'TT-6', name: 'Type 6', color: '#16a0a0' },
+];
+
 const ZOOM_MIN  = 0.1;
 const ZOOM_MAX  = 8.0;
 const ZOOM_STEP = 0.15;
@@ -245,17 +256,33 @@ function normaliseLayout(data) {
   })).filter(e => points[e.from] && points[e.to]);
   const path = { points, segments };
 
-  // STATIONS (action sites + home slots) — positions only; no path link needed
+  // STATIONS — positions only; no path link needed. Roles:
+  //   action — group-mode load-setting stop
+  //   home   — AGV parking / waiting slot
+  //   tbm    — loop-mode machine (demand point); `agv` = its serving AGV (zone)
+  //   store  — loop-mode single load/unload area
+  const STATION_ROLES = ['action', 'home', 'tbm', 'store'];
   const stations = {};
   for (const [id, s] of Object.entries(data.STATIONS || {})) {
     if (!s) continue;
-    stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action', kind: 'station' };
+    const role = STATION_ROLES.includes(s.role) ? s.role : 'action';
+    stations[id] = { x: s.x, y: s.y, role, kind: 'station' };
+    if (role === 'tbm') stations[id].agv = s.agv || null;   // serving AGV (zone allocation)
   }
 
   // AGVS — identities only (#AGVs should equal #home stations)
   const agvs = (data.AGVS || []).map((a, i) => ({
     id:    a.id    || `AGV-0${i + 1}`,
     color: a.color || AGV_COLORS[i % AGV_COLORS.length],
+  }));
+
+  // TROLLEY_TYPES — loop mode; default 6-type palette when omitted
+  const trolleyTypes = (Array.isArray(data.TROLLEY_TYPES) && data.TROLLEY_TYPES.length
+    ? data.TROLLEY_TYPES : DEFAULT_TROLLEY_TYPES
+  ).map((t, i) => ({
+    id:    t.id    || `TT-${i + 1}`,
+    name:  t.name  || `Type ${i + 1}`,
+    color: t.color || AGV_COLORS[i % AGV_COLORS.length],
   }));
 
   // A group node may be a path corner OR a station.
@@ -304,13 +331,32 @@ function normaliseLayout(data) {
   // SIM — optional playback config
   const rawSim = data.SIM || {};
   const ag     = rawSim.autoGenerate || {};
+  const mode   = rawSim.mode === 'loop' ? 'loop' : 'group';
+
+  // Requests differ by engine: group mode fires a GROUP; loop mode fires a
+  // (machine, trolley-type) call. Parse the one matching the active mode.
+  const firstType = trolleyTypes[0] && trolleyTypes[0].id;
+  const typeIds   = new Set(trolleyTypes.map(t => t.id));
+  const requests = mode === 'loop'
+    ? (rawSim.requests || [])
+        .map(r => ({ t: +r.t || 0, machine: r.machine, type: typeIds.has(r.type) ? r.type : firstType }))
+        .filter(r => stations[r.machine] && stations[r.machine].role === 'tbm')
+        .sort((a, b) => a.t - b.t)
+    : (rawSim.requests || [])
+        .map(r => ({ t: +r.t || 0, group: r.group, agv: r.agv || null }))
+        .filter(r => groups[r.group])
+        .sort((a, b) => a.t - b.t);
+
   const sim = {
+    mode,
+    trainSize:   typeof rawSim.trainSize === 'number' ? rawSim.trainSize : 2,
+    pairTimeout: typeof rawSim.pairTimeout === 'number' ? rawSim.pairTimeout : 200,
+    store:       (rawSim.store && stations[rawSim.store] && stations[rawSim.store].role === 'store')
+                   ? rawSim.store
+                   : (Object.keys(stations).find(id => stations[id].role === 'store') || null),
     agvSpeed:    typeof rawSim.agvSpeed === 'number' ? rawSim.agvSpeed : 120,
     serviceTime: typeof rawSim.serviceTime === 'number' ? rawSim.serviceTime : 3,
-    requests: (rawSim.requests || [])
-      .map(r => ({ t: +r.t || 0, group: r.group, agv: r.agv || null }))
-      .filter(r => groups[r.group])
-      .sort((a, b) => a.t - b.t),
+    requests,
     autoGenerate: {
       enabled:      !!ag.enabled,
       meanInterval: typeof ag.meanInterval === 'number' && ag.meanInterval > 0 ? ag.meanInterval : 6,
@@ -318,5 +364,28 @@ function normaliseLayout(data) {
     },
   };
 
-  return { path, stations, agvs, groups, calls, homeSlots, sim };
+  return { path, stations, agvs, groups, calls, homeSlots, trolleyTypes, sim };
+}
+
+// ── Loop-ring routing (loop-dispatch mode) ─────────────────────────────────
+// The drawn PATH is treated as a single one-way cycle. Starting at the store,
+// follow authored edge direction (from→to) around the loop, returning the node
+// ids in travel order [store, n1, n2, …] (store not repeated at the end). At a
+// branch, prefer an unvisited successor. Used to order paired stops by line
+// position and to build the AGV's straight node-to-node route around the loop.
+function buildLoopRing(path, storeId) {
+  if (!storeId) return [];
+  const out = {};
+  (path.segments || []).forEach(e => { (out[e.from] = out[e.from] || []).push(e.to); });
+  const ring = [];
+  const seen = new Set();
+  let cur = storeId;
+  while (cur && !seen.has(cur)) {
+    ring.push(cur);
+    seen.add(cur);
+    const nexts = out[cur] || [];
+    const next  = nexts.find(n => !seen.has(n));
+    cur = (next !== undefined) ? next : null;   // null when the loop closes (only edge goes back to a seen node)
+  }
+  return ring;
 }

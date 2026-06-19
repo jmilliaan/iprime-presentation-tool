@@ -185,6 +185,43 @@ dialog input[type="file"] {
 
 #actionPicker button:hover { border-color: #cc44aa; color: #aa2288; background: #fef0f8; }
 
+/* Loop-mode trolley-type call picker (Animation Player) */
+#typePicker {
+  position: fixed;
+  background: #ffffff;
+  border: 1px solid #34406a;
+  border-radius: 6px;
+  padding: 8px;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 200;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  min-width: 160px;
+}
+#typePicker .picker-label {
+  font-size: 11px;
+  color: #34406a;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid #dde2f0;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+#typePicker button {
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid #d8d8e0;
+  background: #f8f8fc;
+  color: #1a1a2a;
+  font-family: monospace;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.12s;
+}
+#typePicker button:hover { border-color: #34406a; background: #eef1fb; }
+
 /* ── New cpicker (Path/Station/Group/Call) ─────────────────────────────── */
 #groupPicker {
   position: fixed;

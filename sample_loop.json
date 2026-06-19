@@ -1,0 +1,74 @@
+{
+  "PATH": {
+    "nodes": {
+      "ST": { "x": 120, "y": 400 },
+      "A":  { "x": 120, "y": 120 },
+      "M1": { "x": 220, "y": 120 },
+      "M2": { "x": 360, "y": 120 },
+      "M3": { "x": 500, "y": 120 },
+      "M4": { "x": 640, "y": 120 },
+      "B":  { "x": 760, "y": 120 },
+      "C":  { "x": 760, "y": 460 },
+      "M5": { "x": 640, "y": 460 },
+      "M6": { "x": 500, "y": 460 },
+      "M7": { "x": 360, "y": 460 },
+      "M8": { "x": 220, "y": 460 },
+      "D":  { "x": 120, "y": 460 }
+    },
+    "edges": [
+      { "from": "ST", "to": "A" },
+      { "from": "A",  "to": "M1" },
+      { "from": "M1", "to": "M2" },
+      { "from": "M2", "to": "M3" },
+      { "from": "M3", "to": "M4" },
+      { "from": "M4", "to": "B" },
+      { "from": "B",  "to": "C" },
+      { "from": "C",  "to": "M5" },
+      { "from": "M5", "to": "M6" },
+      { "from": "M6", "to": "M7" },
+      { "from": "M7", "to": "M8" },
+      { "from": "M8", "to": "D" },
+      { "from": "D",  "to": "ST" }
+    ]
+  },
+  "STATIONS": {
+    "ST":  { "x": 120, "y": 400, "role": "store" },
+    "M1":  { "x": 220, "y": 120, "role": "tbm", "agv": "AGV-01" },
+    "M2":  { "x": 360, "y": 120, "role": "tbm", "agv": "AGV-01" },
+    "M3":  { "x": 500, "y": 120, "role": "tbm", "agv": "AGV-01" },
+    "M4":  { "x": 640, "y": 120, "role": "tbm", "agv": "AGV-01" },
+    "M5":  { "x": 640, "y": 460, "role": "tbm", "agv": "AGV-02" },
+    "M6":  { "x": 500, "y": 460, "role": "tbm", "agv": "AGV-02" },
+    "M7":  { "x": 360, "y": 460, "role": "tbm", "agv": "AGV-02" },
+    "M8":  { "x": 220, "y": 460, "role": "tbm", "agv": "AGV-02" },
+    "HS1": { "x": 60,  "y": 380, "role": "home" },
+    "HS2": { "x": 60,  "y": 420, "role": "home" }
+  },
+  "AGVS": [
+    { "id": "AGV-01", "color": "#E63946" },
+    { "id": "AGV-02", "color": "#4080e0" }
+  ],
+  "HOME": { "slots": ["HS1", "HS2"] },
+  "TROLLEY_TYPES": [
+    { "id": "TT-1", "name": "Type 1", "color": "#E63946" },
+    { "id": "TT-2", "name": "Type 2", "color": "#4080e0" },
+    { "id": "TT-3", "name": "Type 3", "color": "#1a9c50" },
+    { "id": "TT-4", "name": "Type 4", "color": "#cc44aa" },
+    { "id": "TT-5", "name": "Type 5", "color": "#e08a1e" },
+    { "id": "TT-6", "name": "Type 6", "color": "#16a0a0" }
+  ],
+  "SIM": {
+    "mode": "loop",
+    "agvSpeed": 120,
+    "serviceTime": 3,
+    "pairTimeout": 200,
+    "store": "ST",
+    "autoGenerate": { "enabled": false, "meanInterval": 8, "seed": 1234 },
+    "requests": [
+      { "t": 1, "machine": "M2", "type": "TT-1" },
+      { "t": 2, "machine": "M4", "type": "TT-3" },
+      { "t": 3, "machine": "M6", "type": "TT-2" },
+      { "t": 4, "machine": "M8", "type": "TT-5" }
+    ]
+  }
+}

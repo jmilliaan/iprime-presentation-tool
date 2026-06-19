@@ -147,8 +147,11 @@ function loadIntoState(data) {
     })),
   };
   state.stations = {};
-  for (const [id, s] of Object.entries(data.STATIONS || {}))
-    state.stations[id] = { x: s.x, y: s.y, role: s.role === 'home' ? 'home' : 'action' };
+  for (const [id, s] of Object.entries(data.STATIONS || {})) {
+    const role = ['home', 'tbm', 'store', 'action'].includes(s.role) ? s.role : 'action';
+    state.stations[id] = { x: s.x, y: s.y, role };
+    if (role === 'tbm') state.stations[id].agv = s.agv || null;
+  }
   state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
   if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
   const mapAct = a => (['move', 'none', 'empty', 'full'].includes(a) ? a : 'move');
@@ -370,14 +373,58 @@ function updateLastArc() {
 
 $('stActionBtn').addEventListener('click', () => { state.placeRole = 'action'; updateStationBar(); });
 $('stHomeBtn').addEventListener('click', () => { state.placeRole = 'home'; updateStationBar(); });
+$('stMachineBtn') && $('stMachineBtn').addEventListener('click', () => { state.placeRole = 'tbm'; updateStationBar(); });
+$('stStoreBtn')   && $('stStoreBtn').addEventListener('click', () => { state.placeRole = 'store'; updateStationBar(); });
+$('stZoneSelect') && $('stZoneSelect').addEventListener('change', (e) => { state.zoneAgv = e.target.value; });
+
 function updateStationBar() {
   $('stActionBtn').classList.toggle('active', state.placeRole === 'action');
   $('stHomeBtn').classList.toggle('active', state.placeRole === 'home');
+  const mb = $('stMachineBtn'), sb = $('stStoreBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
+  if (mb) mb.classList.toggle('active', state.placeRole === 'tbm');
+  if (sb) sb.classList.toggle('active', state.placeRole === 'store');
+  // Zone (serving AGV) selector — only relevant when placing machines.
+  if (zw && zs) {
+    zw.style.display = state.placeRole === 'tbm' ? 'flex' : 'none';
+    if (!state.zoneAgv || !state.agvs.some(a => a.id === state.zoneAgv))
+      state.zoneAgv = state.agvs[0] && state.agvs[0].id;
+    zs.innerHTML = '';
+    state.agvs.forEach(a => {
+      const o = document.createElement('option');
+      o.value = a.id; o.textContent = a.id; o.selected = a.id === state.zoneAgv;
+      zs.appendChild(o);
+    });
+  }
+  const hint = $('stHint');
+  if (hint) hint.textContent = (state.placeRole === 'tbm' || state.placeRole === 'store')
+    ? 'Click a PATH corner to tag it (draw the loop in Path mode first) · RClick=undo'
+    : 'Click=place (auto-links to nearest corner) · RClick=undo';
 }
+
 function onClickStation(sx, sy) {
+  const role = state.placeRole;
+
+  // Machines/store sit ON the loop, so they tag an existing path corner (keeping
+  // the id in both PATH.nodes and STATIONS — the loop-ring convention).
+  if (role === 'tbm' || role === 'store') {
+    const cid = hitCorner(sx, sy);
+    if (!cid) { alert('Place machines/store on a path corner — draw the loop in Path mode first.'); return; }
+    const p = state.path.nodes[cid];
+    if (role === 'store') {
+      for (const id of Object.keys(state.stations))
+        if (state.stations[id].role === 'store') delete state.stations[id];   // single store
+      state.stations[cid] = { x: p.x, y: p.y, role: 'store' };
+    } else {
+      const agv = state.zoneAgv || (state.agvs[0] && state.agvs[0].id) || null;
+      state.stations[cid] = { x: p.x, y: p.y, role: 'tbm', agv };
+    }
+    updateHud();
+    return;
+  }
+
   const { ix, iy } = toImg(sx, sy);
-  const id = nextStationId(state.placeRole);
-  state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: state.placeRole };
+  const id = nextStationId(role);
+  state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role };
   updateHud();
 }
 function undoStation() {
@@ -679,6 +726,12 @@ function refreshAll() {
 
 function buildSaveData() {
   const homeSlots = Object.keys(state.stations).filter(id => state.stations[id].role === 'home');
+  // A loop layout (machines on the path + a store) switches the player to the
+  // zoned-pairing engine; otherwise it stays group/FIFO mode.
+  const machines = Object.keys(state.stations).filter(id => state.stations[id].role === 'tbm');
+  const storeId  = Object.keys(state.stations).find(id => state.stations[id].role === 'store') || null;
+  const sim = { ...state.sim };
+  if (machines.length && storeId) { sim.mode = 'loop'; sim.store = storeId; }
   return {
     PATH: { nodes: state.path.nodes, edges: state.path.edges },
     STATIONS: state.stations,
@@ -686,7 +739,7 @@ function buildSaveData() {
     GROUPS: state.groups,
     CALLS: state.calls,
     HOME: { slots: homeSlots },
-    SIM: state.sim,
+    SIM: sim,
   };
 }
 window.buildSaveData = buildSaveData;
@@ -760,15 +813,33 @@ function drawLoop() {
   // stations
   for (const [id, st] of Object.entries(state.stations)) {
     const { sx, sy } = imgToScreen(st.x, st.y, state.view);
+    let labelTint = '#1a1a2a';
     if (st.role === 'home') {
       ctx.beginPath(); ctx.rect(sx - DOT_R, sy - DOT_R, DOT_R * 2, DOT_R * 2);
       ctx.fillStyle = '#cfe8ff'; ctx.fill(); ctx.strokeStyle = '#2c6fbf'; ctx.lineWidth = 1.5; ctx.stroke();
+    } else if (st.role === 'store') {
+      const r = DOT_R + 3;
+      ctx.beginPath(); ctx.rect(sx - r, sy - r, r * 2, r * 2);
+      ctx.fillStyle = '#34406a'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('STORE', sx, sy);
+    } else if (st.role === 'tbm') {
+      const owner = state.agvs.find(a => a.id === st.agv);
+      const tint = owner ? owner.color : '#888';
+      labelTint = tint;
+      ctx.beginPath(); ctx.rect(sx - DOT_R, sy - DOT_R, DOT_R * 2, DOT_R * 2);
+      ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = tint; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx, sy, DOT_R * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = tint; ctx.fill();
     } else {
       ctx.beginPath(); ctx.arc(sx, sy, DOT_R, 0, Math.PI * 2);
       ctx.fillStyle = '#50DC78'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
     }
-    ctx.fillStyle = '#1a1a2a'; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText(id, sx + DOT_R + 3, sy);
+    if (st.role !== 'store') {
+      const tag = st.role === 'tbm' && st.agv ? `${id} · ${st.agv}` : id;
+      ctx.fillStyle = labelTint; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(tag, sx + DOT_R + 3, sy);
+    }
   }
 
   // free-floating call markers

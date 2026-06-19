@@ -66,8 +66,14 @@
     <span class="details-label">Place</span>
     <button class="track-seg-btn active" id="stActionBtn">Action</button>
     <button class="track-seg-btn" id="stHomeBtn">Home</button>
+    <button class="track-seg-btn" id="stMachineBtn">Machine</button>
+    <button class="track-seg-btn" id="stStoreBtn">Store</button>
+    <div id="stZoneWrap" style="display:none;align-items:center;gap:4px;">
+      <span class="details-label">Zone AGV</span>
+      <select id="stZoneSelect" style="font-family:monospace;font-size:12px;padding:2px 4px;"></select>
+    </div>
     <div class="details-sep"></div>
-    <span class="details-hint">Click=place (auto-links to nearest corner) · RClick=undo</span>
+    <span class="details-hint" id="stHint">Click=place (auto-links to nearest corner) · RClick=undo</span>
   </div>
 
   <!-- Group mode hint bar -->

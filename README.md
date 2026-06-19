@@ -167,10 +167,48 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 
 ---
 
+## Loop-dispatch mode (TBM trolley system)
+
+Alongside the default **group/FIFO** model, a layout can opt into **loop mode** — a simulation of the
+factory trolley-dispatch system: machines on a **one-way loop**, AGVs that tow **two trolleys as a
+train**, and **zoned pairing**. The player picks the engine automatically from the layout
+(`SIM.mode: "loop"`); everything else (play/pause, recording, geometric collision) is shared.
+
+How it works:
+
+- **Machines (TBMs)** are path corners tagged with `role:"tbm"` and a **serving AGV** (`agv`) — that
+  allocation *is* the zone. Any number of machines (layout-driven). One **store** (`role:"store"`) is
+  the single load/unload point; each AGV parks at its own **home/wait** slot.
+- **Calls** are per-machine and per **trolley type** (6 types; a layout may define `TROLLEY_TYPES`).
+  In the player, **click a machine → pick a type** to call an empty trolley. Each machine has a status
+  **LED**: *off* (idle) → *blink* (queued / loading) → *solid* (AGV en route) → *off* (serviced).
+- **Pairing:** the engine waits for **2 calls in one zone**, then dispatches that zone's AGV with a
+  2-stop trip (FCFS). A lone call dispatches as a **single-trolley trip** after `pairTimeout` (200 s).
+  Calls in **different zones never pair**.
+- **Visit + loading order:** stops are visited in **loop order**; the train is loaded so the **rear**
+  trolley serves the **first** stop (easy detach) and the **front** serves the **second**. The store
+  "PREPARE" overlay shows the front/rear types to load. At each machine the empty is swapped for a full
+  (full type is not tracked); the AGV completes the loop back to the store and parks.
+- **Degraded mode:** toggle an AGV **down** in the player toolbar → the other AGV serves **all**
+  machines (zones dropped) until it's back.
+- **Traffic:** the same **geometric** collision engine resolves catch-up/merge on the shared loop (the
+  AGV closer to finishing its route proceeds); no RFID conflict table is needed.
+
+**Authoring (Layout Picker):** draw the loop in **Path** mode (corners + one-way edges forming a single
+cycle), then in **Stations** mode use **Machine** / **Store** to tag corners — for machines, pick the
+**Zone AGV** first so each machine is allocated to a serving AGV. Place **Home** wait spots near the
+store. Saving a layout with machines + a store sets `SIM.mode:"loop"` automatically.
+
+A ready example is [`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2 zones,
+a store and 2 AGVs.
+
+---
+
 ## Stack
 
 Vanilla JavaScript · HTML5 Canvas · No frameworks · No build step · Fully client-side.
 
 Files: `cpicker.html`/`cpicker.js` (Layout Picker) · `animplayer.html`/`animplayer.js` (Animation
-Player) · `dispatch.js` (FIFO dispatch + queue engine) · `shared.js` (transforms, geometry, layout
-normalisation, seeded RNG) · `style.css`.
+Player) · `dispatch.js` (group/FIFO dispatch engine) · `loopdispatch.js` (loop-mode zoned-pairing
+engine) · `shared.js` (transforms, geometry, layout normalisation, loop-ring routing, seeded RNG) ·
+`style.css`.

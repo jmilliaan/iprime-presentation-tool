@@ -30,6 +30,7 @@ const LOAD_COLORS = {
 const state = {
   nodes:   {},
   agvs:    [],
+  trolleyTypes: [],
   track:   { points: {}, segments: [] },
   view:    { offsetX: 0, offsetY: 0, zoom: 1 },
   bgImage: null,
@@ -63,7 +64,9 @@ function makeWalker(agvDef) {
     currentStep:  0,
     agvPos:       { x: 0, y: 0 },
     agvHeading:   0,
-    load:         'none',   // 'none' | 'empty' | 'full' — towed-trolley state
+    load:         'none',   // 'none' | 'empty' | 'full' — towed-trolley state (group mode)
+    train:        [],       // loop mode: [{slot:'front'|'rear', type, state:'empty'|'full'}]
+    tripStops:    [],       // loop mode: machine ids on the current trip
     phase:        'idle',   // 'idle' | 'action_pause' | 'moving' | 'done' | 'parked'
     actionTimer:  0,
     currentNode:  null,     // node id the AGV is at / holding a reservation on
@@ -73,14 +76,32 @@ function makeWalker(agvDef) {
   };
 }
 
+// Active dispatch engine — swapped per layout. Both engines (dispatch.js group/FIFO
+// and loopdispatch.js zoned-pairing) expose the same core surface, so most call
+// sites go through `activeEngine`; mode-specific bits branch on `engineMode`.
+let activeEngine = Dispatch;
+let engineMode   = 'group';   // 'group' | 'loop'
+const engineData     = () => (engineMode === 'loop' ? loopdispatch : dispatch);
+const trolleyColor = id => {
+  const t = (state.trolleyTypes || []).find(tt => tt.id === id);
+  return t ? t.color : '#F4A261';
+};
+
 // A sequence node is either a path corner or a station — look up its position.
 function nodePos(id) { return state.track.points[id] || state.nodes[id] || null; }
 
 // Safe centre-to-centre distance a follower must keep behind `leader`. A leader
 // towing a trolley sticks out further behind, so the gap grows to clear it.
+const TROLLEY_PITCH = TROLLEY_LEN + 6;   // centre-to-centre spacing of trolleys in a train
+
 function requiredGapFor(leader) {
   const half = AGV_SIZE / 2;
-  const rear = leader.load !== 'none' ? half + 8 + TROLLEY_LEN : half;   // rear extent of the leader
+  let rear = half;
+  if (leader.train && leader.train.length) {
+    rear = half + 8 + leader.train.length * TROLLEY_PITCH - 6;   // clear the whole train
+  } else if (leader.load !== 'none') {
+    rear = half + 8 + TROLLEY_LEN;
+  }
   return rear + half + FOLLOW_MARGIN;
 }
 
@@ -107,7 +128,7 @@ function homeFree(w) {
 
 // The largest following gap we ever need (a leader towing a trolley). Used to
 // decide how far up our own route to look for AGVs in front.
-const MAX_GAP = 8 + TROLLEY_LEN + AGV_SIZE + FOLLOW_MARGIN;
+const MAX_GAP = 8 + 2 * (TROLLEY_LEN + 6) + AGV_SIZE + FOLLOW_MARGIN;   // covers a 2-trolley train
 
 // Geometric collision clamp. `w` is driving the edge fromId→toId. Returns how far
 // it may advance this frame. We build the polyline `w` will actually drive (its
@@ -194,6 +215,17 @@ function applyActionEffect(seqE, nodePos, w) {
   const action = seqE?.action;
   if (!action || action === 'move') return;
 
+  // Loop-mode train actions. The train is loaded with 2 empties at dispatch; at
+  // each machine the delivered empty is removed and a full attached (type
+  // untracked); at the store the fulls are removed.
+  if (action === 'load')   return;                       // empties already on the train
+  if (action === 'unload') { w.train = []; return; }
+  if (action === 'swap') {
+    const t = (w.train || []).find(s => s.slot === seqE.slot);
+    if (t) t.state = 'full';                             // empty swapped for a full
+    return;
+  }
+
   if (seqE.homeAction) {
     if (action === 'attach-empty') w.load = 'empty';
     else if (action === 'attach-full') w.load = 'full';
@@ -223,7 +255,7 @@ function resetWalker(w) {
 }
 
 function resetAllWalkers() {
-  if (Dispatch.isActive()) { Dispatch.reset(); state.elapsed = 0; return; }
+  if (activeEngine.isActive()) { activeEngine.reset(); state.elapsed = 0; return; }
   state.agvs.forEach(w => resetWalker(w));
   state.elapsed = 0;
 }
@@ -364,15 +396,22 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
     try {
       const data   = JSON.parse(ev.target.result);
       const layout = normaliseLayout(data);
-      state.nodes    = layout.stations;       // stations (action sites + home)
-      state.track    = layout.path;           // path geometry (corners + edges)
+      state.nodes        = layout.stations;       // stations (action sites + home + tbm/store)
+      state.track        = layout.path;           // path geometry (corners + edges)
+      state.trolleyTypes = layout.trolleyTypes;
       state.agvs     = layout.agvs.map(makeWalker);
       state.agvSpeed = layout.sim.agvSpeed;
       document.getElementById('agvSpeedInput').value = layout.sim.agvSpeed;
-      Dispatch.init(layout);
-      document.getElementById('loadStatus').textContent =
-        `${file.name} — ${Object.keys(state.nodes).length} stations · ${state.agvs.length} AGV(s) · ` +
-        `${Dispatch.groupIds().length} groups · ${Dispatch.calls().length} call points`;
+
+      // Pick the engine for this layout (group/FIFO vs loop/zoned-pairing).
+      engineMode   = layout.sim.mode === 'loop' ? 'loop' : 'group';
+      activeEngine = engineMode === 'loop' ? LoopDispatch : Dispatch;
+      activeEngine.init(layout);
+
+      const summary = engineMode === 'loop'
+        ? `${Object.values(state.nodes).filter(s => s.role === 'tbm').length} machines · ${state.agvs.length} AGV(s) · loop mode`
+        : `${Object.keys(state.nodes).length} stations · ${state.agvs.length} AGV(s) · ${Dispatch.groupIds().length} groups · ${Dispatch.calls().length} call points`;
+      document.getElementById('loadStatus').textContent = `${file.name} — ${summary}`;
       state.playing = false;
       updatePlayButton();
       buildDispatchUI();
@@ -430,9 +469,9 @@ function updateStatusBadge() {
 }
 
 function updateStepCounter() {
-  if (Dispatch.isActive()) {
+  if (activeEngine.isActive()) {
     const home = state.agvs.filter(w => w.phase === 'parked').length;
-    stepCounter.textContent = `queue ${Dispatch.queueLength()} · ${home}/${state.agvs.length} home`;
+    stepCounter.textContent = `queue ${activeEngine.queueLength()} · ${home}/${state.agvs.length} home`;
     return;
   }
   if (state.agvs.length === 1) {
@@ -446,10 +485,12 @@ function updateStepCounter() {
 
 function updateQueuePanel() {
   if (!queueBody) return;
-  if (!Dispatch.isActive()) {
+  if (!activeEngine.isActive()) {
     queueBody.innerHTML = '<div class="queue-empty">Load a layout with AGVs to view the queue.</div>';
     return;
   }
+
+  if (engineMode === 'loop') { updateLoopQueuePanel(); return; }
 
   const running = Dispatch.runningSnapshot();
   const pending = Dispatch.queueSnapshot();
@@ -480,14 +521,48 @@ function updateQueuePanel() {
   `).join('');
 }
 
+// Loop-mode side panel: running trips (AGV + stops + train) and pending calls.
+function updateLoopQueuePanel() {
+  const running = LoopDispatch.runningSnapshot();
+  const pending = LoopDispatch.queueSnapshot();
+  const typeName = id => (state.trolleyTypes.find(t => t.id === id) || {}).name || id;
+  const items = [
+    ...running.map(r => ({
+      state: 'running', name: r.agv,
+      detail: `stops ${r.stops.join(' → ') || '—'} · ${r.state}`,
+      sub: r.train.map(s => `${s.slot}:${s.state === 'full' ? 'FULL' : typeName(s.type)}`).join('  '),
+    })),
+    ...pending.map(p => ({
+      state: 'pending', name: p.machine,
+      detail: `call · ${typeName(p.type)}`, sub: `waiting · #${p.order}`,
+    })),
+  ];
+  if (items.length === 0) {
+    queueBody.innerHTML = '<div class="queue-empty">No running trips or pending calls.</div>';
+    return;
+  }
+  queueBody.innerHTML = items.map(item => `
+    <div class="queue-entry ${item.state}">
+      <div class="queue-entry-head">
+        <span class="queue-entry-name">${item.name}</span>
+        <span class="queue-entry-state">${item.state}</span>
+      </div>
+      <div class="queue-entry-detail">${item.detail}</div>
+      <div class="queue-entry-detail">${item.sub}</div>
+    </div>
+  `).join('');
+}
+
 // Dispatch toolbar UI. Group calls are made by clicking the on-canvas call
 // markers, so the toolbar only carries the Auto-generate toggle + a hint.
 function buildDispatchUI() {
   const wrap = document.getElementById('dispatchControls');
   if (!wrap) return;
   wrap.innerHTML = '';
-  if (!Dispatch.isActive()) { wrap.style.display = 'none'; return; }
+  if (!activeEngine.isActive()) { wrap.style.display = 'none'; return; }
   wrap.style.display = 'flex';
+
+  if (engineMode === 'loop') { buildLoopDispatchUI(wrap); return; }
 
   const autoWrap = document.createElement('label');
   const auto = document.createElement('input');
@@ -507,8 +582,42 @@ function buildDispatchUI() {
   wrap.appendChild(hint);
 }
 
+// Loop-mode toolbar: auto-call toggle, per-AGV "down" toggles (single-AGV
+// degraded mode), and a hint.
+function buildLoopDispatchUI(wrap) {
+  const autoWrap = document.createElement('label');
+  const auto = document.createElement('input');
+  auto.type = 'checkbox';
+  auto.checked = loopdispatch.autoGenerate.enabled;
+  auto.addEventListener('change', (e) => {
+    loopdispatch.autoGenerate.enabled = e.target.checked;
+    if (e.target.checked) loopdispatch.nextGenTime = LoopDispatch._nextInterval();
+  });
+  autoWrap.appendChild(auto);
+  autoWrap.appendChild(document.createTextNode(' Auto-call'));
+  wrap.appendChild(autoWrap);
+
+  state.agvs.forEach(w => {
+    const lbl = document.createElement('label');
+    lbl.style.color = w.color;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = LoopDispatch.isDown(w.id);
+    cb.addEventListener('change', (e) => { LoopDispatch.setAgvDown(w.id, e.target.checked); });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(` ${w.id} down`));
+    wrap.appendChild(lbl);
+  });
+
+  const hint = document.createElement('label');
+  hint.style.color = '#9a6800';
+  hint.textContent = 'click a machine to call a trolley';
+  wrap.appendChild(hint);
+}
+
 // Fire the group of whatever call marker is under the given screen point.
 function callMarkerAt(sx, sy) {
+  if (engineMode !== 'group') return null;
   for (const c of Dispatch.calls()) {
     const { sx: mx, sy: my } = imgToScreen(c.x, c.y, state.view);
     if (Math.hypot(sx - mx, sy - my) <= CALL_BTN_RADIUS + 6) return c;
@@ -516,9 +625,20 @@ function callMarkerAt(sx, sy) {
   return null;
 }
 
+// Machine (tbm station) under the given screen point — loop mode click target.
+function machineAt(sx, sy) {
+  if (engineMode !== 'loop') return null;
+  for (const [id, st] of Object.entries(state.nodes)) {
+    if (st.role !== 'tbm') continue;
+    const { sx: mx, sy: my } = imgToScreen(st.x, st.y, state.view);
+    if (Math.hypot(sx - mx, sy - my) <= CALL_BTN_RADIUS + 6) return id;
+  }
+  return null;
+}
+
 btnPlayPause.addEventListener('click', () => {
-  if (!Dispatch.isActive() && state.agvs.every(w => w.sequence.length === 0)) return;
-  if (!Dispatch.isActive() && allDone()) resetAllWalkers();
+  if (!activeEngine.isActive() && state.agvs.every(w => w.sequence.length === 0)) return;
+  if (!activeEngine.isActive() && allDone()) resetAllWalkers();
   state.playing = !state.playing;
   updatePlayButton();
 });
@@ -583,7 +703,7 @@ function startRecording() {
     alert('Video recording is not supported in this browser.\nPlease use Chrome or Edge.');
     return;
   }
-  if (!Dispatch.isActive() && state.agvs.every(w => w.sequence.length === 0)) {
+  if (!activeEngine.isActive() && state.agvs.every(w => w.sequence.length === 0)) {
     alert('Load a layout JSON file first.');
     return;
   }
@@ -657,9 +777,48 @@ canvas.addEventListener('mouseup', (e) => {
         if (!state.playing) { state.playing = true; updatePlayButton(); }
         updateQueuePanel();
       }
+      const machine = machineAt(e.clientX, e.clientY - BAR_TOP);
+      if (machine) openTypePicker(machine, e.clientX, e.clientY);
     }
   }
 });
+
+// Loop mode: clicking a machine opens a 6-type picker; choosing a type files a
+// call (machine, type). 6 buttons per machine == the doc's 6 call buttons.
+function openTypePicker(machineId, clientX, clientY) {
+  const picker = document.getElementById('typePicker');
+  if (!picker) return;
+  picker.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'picker-label';
+  title.textContent = `Call trolley for ${machineId}`;
+  picker.appendChild(title);
+  state.trolleyTypes.forEach(t => {
+    const b = document.createElement('button');
+    b.textContent = t.name;
+    b.style.borderLeft = `6px solid ${t.color}`;
+    b.addEventListener('click', () => {
+      LoopDispatch.enqueue({ machine: machineId, type: t.id });
+      const st = state.nodes[machineId];
+      if (st) state.callPressFx.push({ group: machineId, x: st.x, y: st.y, until: state.elapsed + 0.24 });
+      if (!state.playing) { state.playing = true; updatePlayButton(); }
+      updateQueuePanel();
+      picker.style.display = 'none';
+    });
+    picker.appendChild(b);
+  });
+  picker.style.display = 'block';
+  picker.style.left = `${Math.min(clientX, window.innerWidth - 180)}px`;
+  picker.style.top  = `${Math.min(clientY, window.innerHeight - 220)}px`;
+}
+document.addEventListener('mousedown', (e) => {
+  const picker = document.getElementById('typePicker');
+  if (picker && picker.style.display === 'block' && !picker.contains(e.target) && e.target.tagName === 'CANVAS') {
+    // let the canvas click that opened it through; close on any other click
+  } else if (picker && picker.style.display === 'block' && !picker.contains(e.target)) {
+    picker.style.display = 'none';
+  }
+}, true);
 
 canvas.addEventListener('mousemove', (e) => {
   state.mouse.sx = e.clientX;
@@ -670,9 +829,9 @@ canvas.addEventListener('mousemove', (e) => {
     state.view.offsetX = state.panViewStart.offsetX + (e.clientX - state.panStart.sx);
     state.view.offsetY = state.panViewStart.offsetY + (e.clientY - state.panStart.sy);
   }
-  // pointer cursor when hovering a call marker
-  canvas.style.cursor = (Dispatch.isActive() && callMarkerAt(e.clientX, e.clientY - BAR_TOP))
-    ? 'pointer' : 'default';
+  // pointer cursor when hovering a call marker / machine
+  const overTarget = callMarkerAt(e.clientX, e.clientY - BAR_TOP) || machineAt(e.clientX, e.clientY - BAR_TOP);
+  canvas.style.cursor = (activeEngine.isActive() && overTarget) ? 'pointer' : 'default';
 });
 
 canvas.addEventListener('wheel', (e) => {
@@ -781,7 +940,9 @@ function drawPerson(sx, sy, heading) {
 }
 
 // Draw the towed trolley by load: 'empty' = light/hollow, 'full' = solid + cargo box.
-function drawTrolley(sx, sy, heading, load) {
+// `typeColor` (loop mode) tints an EMPTY trolley by its trolley-type; a FULL trolley
+// is type-agnostic (the system does not track full-trolley type).
+function drawTrolley(sx, sy, heading, load, typeColor) {
   if (load === 'none') return;
   const w = TROLLEY_LEN, h = TROLLEY_WID;
   ctx.save();
@@ -790,9 +951,9 @@ function drawTrolley(sx, sy, heading, load) {
 
   ctx.beginPath();
   ctx.roundRect(-w / 2, -h / 2, w, h, 4);
-  ctx.fillStyle   = load === 'full' ? '#F4A261' : '#fdf0df';   // solid amber vs light
+  ctx.fillStyle   = load === 'full' ? '#F4A261' : (typeColor ? hexToRgba(typeColor, 0.28) : '#fdf0df');
   ctx.fill();
-  ctx.strokeStyle = '#c07830';
+  ctx.strokeStyle = load === 'full' ? '#c07830' : (typeColor || '#c07830');
   ctx.lineWidth   = 2.5;
   ctx.stroke();
 
@@ -822,6 +983,72 @@ function drawAGV(sx, sy, heading, color = '#E63946') {
   const half = AGV_SIZE / 2;
   drawRoundRect(sx - half, sy - half, AGV_SIZE, AGV_SIZE, 4, color, '#ffffff');
   drawHeadingArrow(ctx, sx, sy, heading, 16, '#ffffff', 2);
+}
+
+// Loop mode: draw the 2-trolley train (AGV → FRONT → REAR) chained behind the AGV.
+function drawTrain(ax, ay, heading, train, color) {
+  const rad  = heading * Math.PI / 180;
+  const step = AGV_SIZE / 2 + 8 + TROLLEY_LEN / 2;   // first trolley centre offset
+  const ordered = [...train].sort((a, b) => (a.slot === 'front' ? 0 : 1) - (b.slot === 'front' ? 0 : 1));
+  let px = ax, py = ay;
+  ordered.forEach((slot, i) => {
+    const dist = step + i * TROLLEY_PITCH;
+    const tx = ax - dist * Math.cos(rad), ty = ay - dist * Math.sin(rad);
+    ctx.save();
+    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(tx, ty);
+    ctx.strokeStyle = hexToRgba(color, 0.6); ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(tx, ty, 3, 0, Math.PI * 2); ctx.fillStyle = '#505060'; ctx.fill();
+    ctx.restore();
+    drawTrolley(tx, ty, heading, slot.state, slot.state === 'empty' ? trolleyColor(slot.type) : null);
+    px = tx; py = ty;
+  });
+}
+
+// Loop mode: a machine (TBM) with its confirmation LED + serving-AGV tint.
+function drawMachine(sx, sy, id, st) {
+  const r = CALL_BTN_RADIUS;
+  const led = LoopDispatch.ledState(id);
+  const owner = state.agvs.find(w => w.id === LoopDispatch.servingAgv(id));
+  const tint = owner ? owner.color : '#888';
+
+  // body (square) tinted by serving AGV
+  ctx.beginPath();
+  ctx.rect(sx - r, sy - r, r * 2, r * 2);
+  ctx.fillStyle   = '#ffffff'; ctx.fill();
+  ctx.strokeStyle = tint; ctx.lineWidth = 2; ctx.stroke();
+
+  // LED dot
+  let ledColor = '#c8cdd3';                       // off
+  if (led === 'solid') ledColor = '#2fb357';
+  else if (led === 'blink') {
+    const pulse = 0.35 + 0.65 * Math.abs(Math.sin(state.elapsed * 4));
+    ledColor = `rgba(230,160,30,${pulse.toFixed(2)})`;
+  }
+  ctx.beginPath();
+  ctx.arc(sx, sy, r * 0.45, 0, Math.PI * 2);
+  ctx.fillStyle = ledColor; ctx.fill();
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.stroke();
+
+  const q = (LoopDispatch.pendingByMachine()[id] || 0);
+  ctx.fillStyle    = tint;
+  ctx.font         = 'bold 9px monospace';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(`${id}${q ? ` (${q})` : ''}`, sx, sy - r - 3);
+}
+
+// Loop mode: the single load/unload store.
+function drawStoreMarker(sx, sy, id) {
+  const r = CALL_BTN_RADIUS + 3;
+  ctx.beginPath();
+  ctx.rect(sx - r, sy - r, r * 2, r * 2);
+  ctx.fillStyle   = '#34406a'; ctx.fill();
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle    = '#ffffff';
+  ctx.font         = 'bold 8px monospace';
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('STORE', sx, sy);
 }
 
 function drawActivePulse(sx, sy, t) {
@@ -906,12 +1133,16 @@ function drawScene(timestamp) {
       .map(w => w.sequence[w.currentStep].node)
   );
 
-  // ── Stations: home slots (squares) and action sites (circles) ────────────
+  // ── Stations: home slots (squares), action sites (circles), loop tbm/store ─
   for (const [id, st] of Object.entries(state.nodes)) {
     const { sx, sy } = imgToScreen(st.x, st.y, state.view);
     if (activeTargetIds.has(id)) drawActivePulse(sx, sy, state.elapsed);
 
-    if (st.role === 'home') {
+    if (st.role === 'tbm') {
+      drawMachine(sx, sy, id, st);
+    } else if (st.role === 'store') {
+      drawStoreMarker(sx, sy, id);
+    } else if (st.role === 'home') {
       ctx.beginPath();
       ctx.rect(sx - DOT_RADIUS, sy - DOT_RADIUS, DOT_RADIUS * 2, DOT_RADIUS * 2);
       ctx.fillStyle   = '#cfe8ff'; ctx.fill();
@@ -923,7 +1154,7 @@ function drawScene(timestamp) {
       ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.stroke();
     }
 
-    if (state.showLabels) {
+    if (state.showLabels && st.role !== 'tbm' && st.role !== 'store') {
       ctx.fillStyle    = '#1a1a2a';
       ctx.font         = '10px monospace';
       ctx.textAlign    = 'left';
@@ -932,7 +1163,8 @@ function drawScene(timestamp) {
     }
   }
 
-  // ── Call markers (clickable, free-floating) ──────────────────────────────
+  // ── Call markers (clickable, free-floating) — group mode only ─────────────
+  if (engineMode === 'group') {
   const pending = Dispatch.isActive() ? Dispatch.pendingByGroup() : {};
   Dispatch.calls().forEach(c => {
     const { sx, sy } = imgToScreen(c.x, c.y, state.view);
@@ -975,6 +1207,7 @@ function drawScene(timestamp) {
     ctx.textBaseline = 'bottom';
     ctx.fillText(`▶ ${c.group}${q ? ` (${q})` : ''}`, sx, sy - r - 3);
   });
+  }   // end group-mode call markers
 
   const conflicts = detectConflicts();
 
@@ -987,7 +1220,9 @@ function drawScene(timestamp) {
     const { sx: ax, sy: ay } = imgToScreen(agv.agvPos.x, agv.agvPos.y, state.view);
     const rad = agv.agvHeading * Math.PI / 180;
 
-    if (agv.load !== 'none') {
+    if (agv.train && agv.train.length) {
+      drawTrain(ax, ay, agv.agvHeading, agv.train, agv.color);
+    } else if (agv.load !== 'none') {
       const HITCH = AGV_SIZE / 2 + 8 + TROLLEY_LEN / 2;   // clear the bigger trolley
       const tx = ax - HITCH * Math.cos(rad);
       const ty = ay - HITCH * Math.sin(rad);
@@ -1055,7 +1290,8 @@ function drawScene(timestamp) {
 // On-canvas queue list (top-left) so it is captured in the recording. Mirrors
 // the running + pending snapshots the engine exposes.
 function drawQueueOverlay(cw, ch) {
-  if (!Dispatch.isActive()) return;
+  if (!activeEngine.isActive()) return;
+  if (engineMode === 'loop') { drawLoopOverlay(cw, ch); return; }
   const running = Dispatch.runningSnapshot();
   const pending = Dispatch.queueSnapshot();
   const rows    = [...running, ...pending];
@@ -1112,6 +1348,42 @@ function drawQueueOverlay(cw, ch) {
   ctx.restore();
 }
 
+// Loop mode on-canvas overlay: the store "prepare" display (trolleys to load,
+// front/rear) plus running trips and pending calls. Captured in recordings.
+function drawLoopOverlay(cw, ch) {
+  const prep    = LoopDispatch.prepareDisplay();
+  const running = LoopDispatch.runningSnapshot();
+  const pending = LoopDispatch.queueSnapshot();
+  const typeName = id => (state.trolleyTypes.find(t => t.id === id) || {}).name || id || '—';
+
+  const x = 10, y = 10, w = 268;
+  const lines = [];
+  lines.push({ kind: 'title', text: `LOOP — ${running.length} running · ${pending.length} calls` });
+  if (prep.length) {
+    prep.forEach(p => lines.push({ kind: 'prep', text: `PREPARE ${p.agv}: front=${typeName(p.front)}  rear=${typeName(p.rear)}` }));
+  }
+  running.forEach(r => lines.push({ kind: 'run', text: `${r.agv} → ${r.stops.join(',') || '—'} · ${r.state}` }));
+  pending.slice(0, 4).forEach(p => lines.push({ kind: 'pend', text: `call ${p.machine} · ${typeName(p.type)}` }));
+
+  const titleH = 22, rowH = 18;
+  const h = titleH + Math.max(1, lines.length - 1) * rowH + 8;
+  ctx.save();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  drawRoundRect(x, y, w, h, 8, 'rgba(255,255,255,0.95)', '#34406a');
+  let ry = y + 13;
+  lines.forEach(ln => {
+    if (ln.kind === 'title') {
+      ctx.fillStyle = '#34406a'; ctx.font = 'bold 11px monospace';
+      ctx.fillText(ln.text, x + 10, ry); ry += titleH;
+    } else {
+      ctx.fillStyle = ln.kind === 'prep' ? '#9a6800' : (ln.kind === 'run' ? '#176935' : '#68737d');
+      ctx.font = (ln.kind === 'prep' ? 'bold ' : '') + '10px monospace';
+      ctx.fillText(ln.text.slice(0, 38), x + 10, ry); ry += rowH;
+    }
+  });
+  ctx.restore();
+}
+
 function drawHUD(cw, ch) {
   ctx.save();
   ctx.fillStyle = 'rgba(240,240,248,0.92)';
@@ -1127,7 +1399,7 @@ function drawHUD(cw, ch) {
     ctx.fillStyle = '#9090a8';
     ctx.fillText('No layout loaded', x, ch - 11);
   } else {
-    const dispatchActive = Dispatch.isActive();
+    const dispatchActive = activeEngine.isActive();
     activeWalkers.slice(0, 3).forEach((w, i) => {
       if (i > 0) {
         ctx.fillStyle = '#c0c0cc';
@@ -1135,11 +1407,12 @@ function drawHUD(cw, ch) {
         x += ctx.measureText(' | ').width;
       }
       const phaseLabel = dispatchActive
-        ? Dispatch.stateLabel(w)
+        ? activeEngine.stateLabel(w)
         : (w.phase === 'action_pause'
             ? (w.sequence[w.currentStep]?.action?.toUpperCase() || 'PAUSE')
             : w.phase.toUpperCase());
-      const label = `${w.id}: ${phaseLabel}${dispatchActive && w.job ? ` (${w.job})` : ''}`;
+      const jobTag = dispatchActive && w.job && engineMode === 'group' ? ` (${w.job})` : '';
+      const label = `${w.id}: ${phaseLabel}${jobTag}`;
       ctx.fillStyle = w.color;
       ctx.fillText(label, x, ch - 11);
       x += ctx.measureText(label).width;
@@ -1150,11 +1423,9 @@ function drawHUD(cw, ch) {
       ctx.fillText(more, x, ch - 11);
       x += ctx.measureText(more).width;
     }
-    if (Dispatch.isActive()) {
-      const pend = Dispatch.pendingByGroup();
-      const perGroup = Dispatch.groupIds().map(id => `${id}:${pend[id] || 0}`).join('  ');
+    if (activeEngine.isActive()) {
       ctx.fillStyle = '#9090a8';
-      const qtxt = `   Queue: ${Dispatch.queueLength()}   ${perGroup}`;
+      const qtxt = `   Queue: ${activeEngine.queueLength()}`;
       ctx.fillText(qtxt, x, ch - 11);
       x += ctx.measureText(qtxt).width;
     }
@@ -1186,19 +1457,19 @@ function tick(timestamp) {
   const dt = Math.min(rawDt, 0.1) * state.timeScale;
   state.callPressFx = state.callPressFx.filter(fx => fx.until > state.elapsed - 0.05);
 
-  const dispatchActive = Dispatch.isActive();
+  const dispatchActive = activeEngine.isActive();
   const anyActive = state.agvs.some(w => w.phase !== 'idle' && w.phase !== 'done' && w.phase !== 'parked');
   if (state.playing && (anyActive || dispatchActive)) {
     state.elapsed += dt;
     updateAllWalkers(dt);
-    if (dispatchActive) Dispatch.update(dt);
+    if (dispatchActive) activeEngine.update(dt);
     updateStatusBadge();
     updateStepCounter();
     // A scripted timeline (SIM.requests) has a natural end, so it auto-pauses
     // and auto-stops recording once it drains. On-demand mode (no timeline) is
     // live — it only ends when the user pauses or clicks Stop.
-    const scripted = dispatchActive && dispatch.requests.length > 0;
-    const finished = dispatchActive ? (scripted && Dispatch.allComplete()) : allDone();
+    const scripted = dispatchActive && engineData().requests.length > 0;
+    const finished = dispatchActive ? (scripted && activeEngine.allComplete()) : allDone();
     if (finished) {
       state.playing = false;
       updatePlayButton();
