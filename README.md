@@ -78,8 +78,9 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 - **Path:** click empty space to drop a corner (it chains from the selected one); click a corner to
   select/connect; `A` toggles arc, with radius + CW/CCW controls; right-click undoes.
 - **Stations:** toggle **Action / Home**, then click to place them. The same bar also has **Machine /
-  Attach / Share stop** (Machine carries a **Zone** AGV selector) for authoring loop-mode layouts — all
-  drop **free-floating** at the click. See *Loop-dispatch mode* below.
+  Attach / Share stop** for authoring loop-mode layouts — all drop **free-floating** at the click. A
+  machine's serving AGV comes from the **loop** that contains it (assigned in *Loops* mode), so there's
+  no per-machine zone selector. See *Loop-dispatch mode* below.
 - **Loops:** (loops-mode authoring) **+ New loop**, pick its **AGV**, then click corners/machines in
   travel order to build the route; right-click pops the last node. See *Loop-dispatch mode* below.
 - **Groups:** pick/create the active group (right panel), then click nodes in travel order. Clicking a

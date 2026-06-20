@@ -157,7 +157,7 @@ function loadIntoState(data) {
     const role = ['home', 'tbm', 'store', 'attach', 'action'].includes(s.role) ? s.role : 'action';
     state.stations[id] = { x: s.x, y: s.y, role };
     if (role === 'tbm') {
-      state.stations[id].agv = s.agv || null;
+      if (s.agv)  state.stations[id].agv  = s.agv;    // legacy zone allocation (loops derive AGV from the loop)
       if (s.stop) state.stations[id].stop = s.stop;   // loops mode: serviced-at node
     }
   }
@@ -216,6 +216,16 @@ function syncCounters() {
 function toImg(sx, sy) { return screenToImg(sx, sy, state.view); }
 // A group node may be a path corner or a station.
 function nodePosC(id) { return state.path.nodes[id] || state.stations[id] || null; }
+// A machine's serving AGV is derived from the loop whose route contains its stop
+// node (mirrors the loops engine) — there is no per-machine zone. null if unassigned.
+function machineLoopAgv(machineId) {
+  const st = state.stations[machineId];
+  const stopNode = (st && st.stop) || machineId;
+  for (const lp of Object.values(state.loops)) {
+    if (lp.route && lp.route.includes(stopNode)) return lp.agv || null;
+  }
+  return null;
+}
 function hitCorner(sx, sy) {
   for (const [id, p] of Object.entries(state.path.nodes)) {
     const s = imgToScreen(p.x, p.y, state.view);
@@ -402,28 +412,15 @@ $('stHomeBtn').addEventListener('click', () => { state.placeRole = 'home'; updat
 $('stMachineBtn') && $('stMachineBtn').addEventListener('click', () => { state.placeRole = 'tbm'; updateStationBar(); });
 $('stAttachBtn')  && $('stAttachBtn').addEventListener('click', () => { state.placeRole = 'attach'; updateStationBar(); });
 $('stShareBtn')   && $('stShareBtn').addEventListener('click', () => { state.placeRole = 'share'; state.shareHost = null; updateStationBar(); });
-$('stZoneSelect') && $('stZoneSelect').addEventListener('change', (e) => { state.zoneAgv = e.target.value; });
 
 function updateStationBar() {
   if (state.placeRole !== 'share') state.shareHost = null;
   $('stActionBtn').classList.toggle('active', state.placeRole === 'action');
   $('stHomeBtn').classList.toggle('active', state.placeRole === 'home');
-  const mb = $('stMachineBtn'), ab = $('stAttachBtn'), shb = $('stShareBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
+  const mb = $('stMachineBtn'), ab = $('stAttachBtn'), shb = $('stShareBtn');
   if (mb) mb.classList.toggle('active', state.placeRole === 'tbm');
   if (ab) ab.classList.toggle('active', state.placeRole === 'attach');
   if (shb) shb.classList.toggle('active', state.placeRole === 'share');
-  // Zone (serving AGV) selector — only relevant when placing machines.
-  if (zw && zs) {
-    zw.style.display = state.placeRole === 'tbm' ? 'flex' : 'none';
-    if (!state.zoneAgv || !state.agvs.some(a => a.id === state.zoneAgv))
-      state.zoneAgv = state.agvs[0] && state.agvs[0].id;
-    zs.innerHTML = '';
-    state.agvs.forEach(a => {
-      const o = document.createElement('option');
-      o.value = a.id; o.textContent = a.id; o.selected = a.id === state.zoneAgv;
-      zs.appendChild(o);
-    });
-  }
   const hint = $('stHint');
   if (hint) {
     if (state.placeRole === 'tbm')
@@ -472,19 +469,18 @@ function onClickStation(sx, sy) {
   }
 
   // Machines drop free-floating at the click — the loops engine resolves them by
-  // position and route membership, so they need NOT be path corners. Clicking
-  // directly on an existing corner still reuses it (so zone-model layouts, where a
-  // machine must be a ring node, can place it on the path on purpose).
+  // position and route membership, so they need NOT be path corners (and their
+  // serving AGV comes from the loop that contains them, not a per-machine zone).
+  // Clicking directly on an existing corner still reuses it.
   if (role === 'tbm') {
-    const agv = state.zoneAgv || (state.agvs[0] && state.agvs[0].id) || null;
     const cid = hitCorner(sx, sy);
     if (cid) {
       const p = state.path.nodes[cid];
-      state.stations[cid] = { x: p.x, y: p.y, role: 'tbm', agv };
+      state.stations[cid] = { x: p.x, y: p.y, role: 'tbm' };
     } else {
       const { ix, iy } = toImg(sx, sy);
       const id = nextMachineId();
-      state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: 'tbm', agv };
+      state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: 'tbm' };
     }
     updatePathBar(); updateHud();
     return;
@@ -1048,7 +1044,8 @@ function drawLoop() {
       ctx.fillStyle = '#fff'; ctx.font = 'bold 6px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(st.role === 'attach' ? 'ATT' : 'STORE', sx, sy);
     } else if (st.role === 'tbm') {
-      const owner = state.agvs.find(a => a.id === st.agv);
+      const ownerId = machineLoopAgv(id);
+      const owner = state.agvs.find(a => a.id === ownerId);
       const tint = owner ? owner.color : '#888';
       labelTint = tint;
       ctx.beginPath(); ctx.rect(sx - DOT_R, sy - DOT_R, DOT_R * 2, DOT_R * 2);
@@ -1060,7 +1057,8 @@ function drawLoop() {
       ctx.fillStyle = '#50DC78'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
     }
     if (st.role !== 'store' && st.role !== 'attach') {
-      const tag = st.role === 'tbm' && st.agv ? `${id} · ${st.agv}` : id;
+      const owner = st.role === 'tbm' ? machineLoopAgv(id) : null;
+      const tag = owner ? `${id} · ${owner}` : id;
       ctx.fillStyle = labelTint; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.fillText(tag, sx + DOT_R + 3, sy);
     }
