@@ -122,6 +122,10 @@ valid roles; an unknown role falls back to `"action"`.
 | `attach` | loop (loops) | The shared **load** point (empties loaded here). One per loops-model layout; paired with per-AGV `home` unload. Free-floating (the AGV drives straight to it). |
 
 Notes:
+- Any station may carry an optional **`name`** — a *visual display label* shown in the Picker and player
+  (machine markers, the call type-picker). It is **display-only**: the station **key/id** (e.g. `M-7`) is
+  the **operational** name used in `LOOPS[].route`, `stop`, `HOME.slots`, etc. Renaming changes `name`,
+  never the id. If `name` is absent, the id is shown.
 - Only `tbm` stations carry `agv` (zone) and `stop` (loops shared stop). Other roles ignore them.
 - **A `tbm`/`store`/`attach` station id usually equals a `PATH.nodes` id** — the same id appears in
   *both* `PATH.nodes` and `STATIONS`. Load-bearing for routing; see §6.

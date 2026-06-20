@@ -62,6 +62,7 @@ const pathBar     = $('pathBar'),    stationBar = $('stationBar');
 const groupBar    = $('groupBar'),   callBar    = $('callBar');
 const groupsPanel = $('groupsPanel'), groupsBody = $('groupsBody');
 const loopsPanel  = $('loopsPanel'),  loopsBody  = $('loopsBody');
+const machinesPanel = $('machinesPanel'), machinesBody = $('machinesBody');
 const loopsBar    = $('loopsBar');
 const simBody     = $('simBody');
 const actionPicker = $('actionPicker'), groupPicker = $('groupPicker'), groupPickerBody = $('groupPickerBody');
@@ -156,6 +157,7 @@ function loadIntoState(data) {
   for (const [id, s] of Object.entries(data.STATIONS || {})) {
     const role = ['home', 'tbm', 'store', 'attach', 'action'].includes(s.role) ? s.role : 'action';
     state.stations[id] = { x: s.x, y: s.y, role };
+    if (s.name) state.stations[id].name = s.name;      // visual display name (id stays operational)
     if (role === 'tbm') {
       if (s.agv)  state.stations[id].agv  = s.agv;    // legacy zone allocation (loops derive AGV from the loop)
       if (s.stop) state.stations[id].stop = s.stop;   // loops mode: serviced-at node
@@ -271,9 +273,10 @@ function setMode(m) {
   loopsBar.style.display   = m === 'LOOPS'   ? 'flex'  : 'none';
   groupsPanel.style.display = m === 'GROUP'  ? 'block' : 'none';
   loopsPanel.style.display  = m === 'LOOPS'  ? 'block' : 'none';
+  if (machinesPanel) machinesPanel.style.display = m === 'STATION' ? 'block' : 'none';
   if (m !== 'GROUP') state.groupEditMode = 'add';
   updateGroupBar();
-  updateLoopsBar(); updateLoopsPanel();
+  updateLoopsBar(); updateLoopsPanel(); updateMachinesPanel();
 }
 
 window.addEventListener('keydown', (e) => {
@@ -453,7 +456,7 @@ function onClickStation(sx, sy) {
       state.stations[sid].stop = state.shareHost;                          // join host's stop
       state.shareHost = null;
     }
-    updateStationBar(); updateHud();
+    updateStationBar(); updateHud(); updateMachinesPanel();
     return;
   }
 
@@ -482,7 +485,7 @@ function onClickStation(sx, sy) {
       const id = nextMachineId();
       state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: 'tbm' };
     }
-    updatePathBar(); updateHud();
+    updatePathBar(); updateHud(); updateMachinesPanel();
     return;
   }
 
@@ -498,7 +501,7 @@ function undoStation() {
   delete state.stations[last];
   // cascade: drop references
   for (const g of Object.values(state.groups)) g.stops = g.stops.filter(s => s.node !== last);
-  updateHud(); updateGroupsPanel();
+  updateHud(); updateGroupsPanel(); updateMachinesPanel();
 }
 
 // ── GROUP mode ─────────────────────────────────────────────────────────────────
@@ -579,6 +582,66 @@ function startRenameGroup(id, g, nameEl) {
   nameEl.replaceWith(input);
   input.focus();
   input.select();
+}
+
+// Generic inline-rename: replace a label with a text input. `apply(v)` gets the
+// trimmed value (''=cleared); `refresh()` rebuilds the panel. Renames VISUAL names
+// only — operational ids (M-1 / L-4, used in routes & refs) never change.
+function startInlineRename(nameEl, current, placeholder, apply, refresh) {
+  let finished = false;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = current;
+  input.placeholder = placeholder;
+  input.style.cssText = 'width:120px;font-family:monospace;font-size:12px;padding:1px 4px;border:1px solid #c0a000;border-radius:4px;background:#fff;color:#1a1a2a;';
+  const commit = () => { if (finished) return; finished = true; apply(input.value.trim()); refresh(); };
+  const cancel = () => { if (finished) return; finished = true; refresh(); };
+  input.addEventListener('click', ev => ev.stopPropagation());
+  input.addEventListener('dblclick', ev => ev.stopPropagation());
+  input.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter')  { ev.preventDefault(); commit(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+  nameEl.replaceWith(input);
+  input.focus(); input.select();
+}
+
+// Machines list (STATION mode): every tbm with its editable VISUAL name. The
+// operational id (M-1 …, used in routes / shared-stop refs) is shown but fixed.
+function updateMachinesPanel() {
+  if (!machinesBody) return;
+  const ids = Object.keys(state.stations).filter(id => state.stations[id].role === 'tbm');
+  if (!ids.length) {
+    machinesBody.innerHTML = '<div style="padding:6px 10px;color:#888;font-size:11px;">No machines yet — place some with the Machine tool.</div>';
+    return;
+  }
+  machinesBody.innerHTML = '';
+  ids.forEach(id => {
+    const st = state.stations[id];
+    const row = document.createElement('div');
+    row.className = 'agv-entry';
+    const info = document.createElement('span');
+    info.style.cssText = 'flex:1;display:flex;flex-direction:column;';
+    const nameEl = document.createElement('span');
+    nameEl.textContent = st.name || id;
+    nameEl.title = 'Double-click to rename (display name only)';
+    nameEl.style.cursor = 'text';
+    const owner = state.agvs.find(a => a.id === machineLoopAgv(id));
+    if (owner) nameEl.style.color = owner.color;
+    nameEl.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      startInlineRename(nameEl, st.name || '', id,
+        v => { if (v) st.name = v; else delete st.name; }, updateMachinesPanel);
+    });
+    const idEl = document.createElement('span');
+    idEl.style.cssText = 'color:#888;font-size:10px;';
+    idEl.textContent = id + (st.stop ? ` · shares ${st.stop}` : '');
+    info.appendChild(nameEl); info.appendChild(idEl);
+    row.appendChild(info);
+    machinesBody.appendChild(row);
+  });
 }
 
 function updateGroupsPanel() {
@@ -729,6 +792,14 @@ function updateLoopsPanel() {
     const info = document.createElement('span');
     info.style.cssText = 'flex:1;display:flex;flex-direction:column;';
     const nameEl = document.createElement('span'); nameEl.textContent = lp.name || id;
+    nameEl.title = 'Double-click to rename (display name only)';
+    nameEl.style.cursor = 'text';
+    nameEl.addEventListener('click', (ev) => ev.stopPropagation());   // don't trigger row-select mid double-click
+    nameEl.addEventListener('dblclick', (ev) => {
+      ev.stopPropagation();
+      startInlineRename(nameEl, lp.name && lp.name !== id ? lp.name : '', id,
+        v => { lp.name = v || id; }, () => { updateLoopsPanel(); updateLoopsBar(); });
+    });
     const idEl = document.createElement('span'); idEl.style.cssText = 'color:#888;font-size:10px;';
     idEl.textContent = `${id} · ${lp.agv || '—'}`;
     info.appendChild(nameEl); info.appendChild(idEl);
@@ -1059,8 +1130,9 @@ function drawLoop() {
       ctx.fillStyle = '#50DC78'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
     }
     if (st.role !== 'store' && st.role !== 'attach') {
+      const label = st.name || id;                    // visual name, else operational id
       const owner = st.role === 'tbm' ? machineLoopAgv(id) : null;
-      const tag = owner ? `${id} · ${owner}` : id;
+      const tag = owner ? `${label} · ${owner}` : label;
       ctx.fillStyle = labelTint; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.fillText(tag, sx + DOT_R + 3, sy);
     }

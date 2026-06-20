@@ -1,0 +1,866 @@
+{
+  "PATH": {
+    "nodes": {
+      "P-1": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-2": {
+        "x": 1467,
+        "y": 1116
+      },
+      "P-3": {
+        "x": 1485,
+        "y": 1127
+      },
+      "P-4": {
+        "x": 1486,
+        "y": 1152
+      },
+      "P-5": {
+        "x": 1467,
+        "y": 1166
+      },
+      "P-6": {
+        "x": 1222,
+        "y": 1165
+      },
+      "P-7": {
+        "x": 1202,
+        "y": 1188
+      },
+      "P-8": {
+        "x": 1201,
+        "y": 1826
+      },
+      "P-9": {
+        "x": 435,
+        "y": 1826
+      },
+      "P-10": {
+        "x": 436,
+        "y": 1601
+      },
+      "P-12": {
+        "x": 1143,
+        "y": 1602
+      },
+      "P-13": {
+        "x": 1179,
+        "y": 1567
+      },
+      "P-15": {
+        "x": 1286,
+        "y": 1165
+      },
+      "P-16": {
+        "x": 1265,
+        "y": 1151
+      },
+      "P-17": {
+        "x": 123,
+        "y": 1150
+      },
+      "P-18": {
+        "x": 123,
+        "y": 921
+      },
+      "P-19": {
+        "x": 1178,
+        "y": 921
+      },
+      "P-20": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-21": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-22": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-23": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-24": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-25": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-26": {
+        "x": 1177,
+        "y": 457
+      },
+      "P-27": {
+        "x": 323,
+        "y": 457
+      },
+      "P-28": {
+        "x": 323,
+        "y": 392
+      },
+      "P-30": {
+        "x": 364,
+        "y": 391
+      },
+      "P-31": {
+        "x": 413,
+        "y": 454
+      },
+      "P-32": {
+        "x": 1220,
+        "y": 1150
+      },
+      "P-33": {
+        "x": 1201,
+        "y": 1130
+      },
+      "P-34": {
+        "x": 1201,
+        "y": 861
+      },
+      "P-35": {
+        "x": 1177,
+        "y": 832
+      },
+      "P-36": {
+        "x": 124,
+        "y": 1385
+      },
+      "P-37": {
+        "x": 1178,
+        "y": 1386
+      },
+      "P-38": {
+        "x": 1289,
+        "y": 1114
+      },
+      "P-39": {
+        "x": 1303,
+        "y": 1127
+      },
+      "P-40": {
+        "x": 1361,
+        "y": 1127
+      },
+      "P-42": {
+        "x": 1375,
+        "y": 1115
+      },
+      "P-43": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-44": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-45": {
+        "x": 1178,
+        "y": 1114
+      },
+      "P-46": {
+        "x": 1178,
+        "y": 1114
+      }
+    },
+    "edges": [
+      {
+        "id": "E-52",
+        "from": "P-1",
+        "to": "P-46",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-53",
+        "from": "P-46",
+        "to": "P-45",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-51",
+        "from": "P-45",
+        "to": "P-44",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-49",
+        "from": "P-44",
+        "to": "P-43",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-47",
+        "from": "P-43",
+        "to": "P-25",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-30",
+        "from": "P-25",
+        "to": "P-24",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-28",
+        "from": "P-24",
+        "to": "P-23",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-26",
+        "from": "P-23",
+        "to": "P-22",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-24",
+        "from": "P-22",
+        "to": "P-21",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-22",
+        "from": "P-21",
+        "to": "P-20",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-20",
+        "from": "P-20",
+        "to": "P-2",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-2",
+        "from": "P-2",
+        "to": "P-3",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-3",
+        "from": "P-3",
+        "to": "P-4",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-4",
+        "from": "P-4",
+        "to": "P-5",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-5",
+        "from": "P-5",
+        "to": "P-6",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-6",
+        "from": "P-6",
+        "to": "P-7",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-7",
+        "from": "P-7",
+        "to": "P-8",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-8",
+        "from": "P-8",
+        "to": "P-9",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-9",
+        "from": "P-9",
+        "to": "P-10",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-11",
+        "from": "P-10",
+        "to": "P-12",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-12",
+        "from": "P-12",
+        "to": "P-13",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-13",
+        "from": "P-13",
+        "to": "P-1",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-14",
+        "from": "P-15",
+        "to": "P-16",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-15",
+        "from": "P-16",
+        "to": "P-17",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-16",
+        "from": "P-17",
+        "to": "P-18",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-17",
+        "from": "P-18",
+        "to": "P-19",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-18",
+        "from": "P-19",
+        "to": "P-1",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-31",
+        "from": "P-19",
+        "to": "P-26",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-32",
+        "from": "P-26",
+        "to": "P-27",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-33",
+        "from": "P-27",
+        "to": "P-28",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-35",
+        "from": "P-28",
+        "to": "P-30",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-36",
+        "from": "P-30",
+        "to": "P-31",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-37",
+        "from": "P-32",
+        "to": "P-33",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-38",
+        "from": "P-33",
+        "to": "P-34",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-39",
+        "from": "P-34",
+        "to": "P-35",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-40",
+        "from": "P-17",
+        "to": "P-36",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-41",
+        "from": "P-36",
+        "to": "P-37",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-42",
+        "from": "P-38",
+        "to": "P-39",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-43",
+        "from": "P-39",
+        "to": "P-40",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      },
+      {
+        "id": "E-45",
+        "from": "P-40",
+        "to": "P-42",
+        "type": "straight",
+        "radius": 120,
+        "clockwise": true
+      }
+    ]
+  },
+  "STATIONS": {
+    "HS-1": {
+      "x": 1331,
+      "y": 1128,
+      "role": "home"
+    },
+    "HS-2": {
+      "x": 1330,
+      "y": 1114,
+      "role": "home"
+    },
+    "M-1": {
+      "x": 954,
+      "y": 457,
+      "role": "tbm"
+    },
+    "M-2": {
+      "x": 802,
+      "y": 457,
+      "role": "tbm"
+    },
+    "M-3": {
+      "x": 651,
+      "y": 456,
+      "role": "tbm"
+    },
+    "M-4": {
+      "x": 499,
+      "y": 456,
+      "role": "tbm"
+    },
+    "M-7": {
+      "x": 1088,
+      "y": 927,
+      "role": "tbm"
+    },
+    "M-8": {
+      "x": 1089,
+      "y": 915,
+      "role": "tbm",
+      "stop": "M-7"
+    },
+    "M-9": {
+      "x": 964,
+      "y": 926,
+      "role": "tbm"
+    },
+    "M-10": {
+      "x": 963,
+      "y": 914,
+      "role": "tbm",
+      "stop": "M-9"
+    },
+    "M-11": {
+      "x": 838,
+      "y": 927,
+      "role": "tbm"
+    },
+    "M-12": {
+      "x": 838,
+      "y": 914,
+      "role": "tbm",
+      "stop": "M-11"
+    },
+    "M-13": {
+      "x": 714,
+      "y": 927,
+      "role": "tbm"
+    },
+    "M-14": {
+      "x": 716,
+      "y": 914,
+      "role": "tbm",
+      "stop": "M-13"
+    },
+    "M-15": {
+      "x": 588,
+      "y": 929,
+      "role": "tbm"
+    },
+    "M-16": {
+      "x": 589,
+      "y": 913,
+      "role": "tbm",
+      "stop": "M-15"
+    },
+    "M-17": {
+      "x": 465,
+      "y": 927,
+      "role": "tbm"
+    },
+    "M-18": {
+      "x": 464,
+      "y": 913,
+      "role": "tbm",
+      "stop": "M-17"
+    },
+    "M-19": {
+      "x": 339,
+      "y": 928,
+      "role": "tbm"
+    },
+    "M-20": {
+      "x": 335,
+      "y": 914,
+      "role": "tbm",
+      "stop": "M-19"
+    },
+    "M-21": {
+      "x": 218,
+      "y": 928,
+      "role": "tbm"
+    },
+    "M-22": {
+      "x": 218,
+      "y": 911,
+      "role": "tbm",
+      "stop": "M-21"
+    },
+    "M-23": {
+      "x": 219,
+      "y": 1385,
+      "role": "tbm"
+    },
+    "M-24": {
+      "x": 343,
+      "y": 1386,
+      "role": "tbm"
+    },
+    "M-25": {
+      "x": 468,
+      "y": 1381,
+      "role": "tbm"
+    },
+    "M-26": {
+      "x": 468,
+      "y": 1390,
+      "role": "tbm",
+      "stop": "M-25"
+    },
+    "M-27": {
+      "x": 593,
+      "y": 1381,
+      "role": "tbm"
+    },
+    "M-28": {
+      "x": 592,
+      "y": 1391,
+      "role": "tbm",
+      "stop": "M-27"
+    },
+    "M-29": {
+      "x": 715,
+      "y": 1381,
+      "role": "tbm"
+    },
+    "M-30": {
+      "x": 715,
+      "y": 1390,
+      "role": "tbm",
+      "stop": "M-29"
+    },
+    "M-31": {
+      "x": 838,
+      "y": 1382,
+      "role": "tbm"
+    },
+    "M-32": {
+      "x": 838,
+      "y": 1390,
+      "role": "tbm",
+      "stop": "M-31"
+    },
+    "M-33": {
+      "x": 960,
+      "y": 1383,
+      "role": "tbm"
+    },
+    "M-34": {
+      "x": 966,
+      "y": 1387,
+      "role": "tbm",
+      "stop": "M-33"
+    },
+    "M-35": {
+      "x": 1082,
+      "y": 1382,
+      "role": "tbm"
+    },
+    "M-36": {
+      "x": 1090,
+      "y": 1388,
+      "role": "tbm",
+      "stop": "M-35"
+    },
+    "M-37": {
+      "x": 1097,
+      "y": 1826,
+      "role": "tbm"
+    },
+    "M-38": {
+      "x": 990,
+      "y": 1826,
+      "role": "tbm"
+    },
+    "M-39": {
+      "x": 878,
+      "y": 1825,
+      "role": "tbm"
+    },
+    "M-40": {
+      "x": 760,
+      "y": 1825,
+      "role": "tbm"
+    },
+    "ATT": {
+      "x": 1368,
+      "y": 1165,
+      "role": "attach"
+    }
+  },
+  "AGVS": [
+    {
+      "id": "AGV-01",
+      "color": "#E63946"
+    },
+    {
+      "id": "AGV-02",
+      "color": "#4080e0"
+    }
+  ],
+  "GROUPS": {},
+  "CALLS": [],
+  "HOME": {
+    "slots": [
+      "HS-1",
+      "HS-2"
+    ]
+  },
+  "SIM": {
+    "agvSpeed": 120,
+    "serviceTime": 3,
+    "requests": [],
+    "autoGenerate": {
+      "enabled": false,
+      "meanInterval": 6,
+      "seed": 1234
+    },
+    "mode": "loop",
+    "attach": "ATT"
+  },
+  "LOOPS": {
+    "L-4": {
+      "name": "L-4",
+      "agv": "AGV-01",
+      "route": [
+        "P-42",
+        "P-2",
+        "P-3",
+        "P-4",
+        "P-5",
+        "ATT",
+        "P-15",
+        "P-16",
+        "P-32",
+        "P-33",
+        "P-34",
+        "P-35",
+        "P-26",
+        "P-27",
+        "P-28",
+        "P-30",
+        "P-31",
+        "M-4",
+        "M-3",
+        "M-2",
+        "M-1",
+        "P-26",
+        "P-1",
+        "P-38"
+      ],
+      "pair": false,
+      "pairTimeout": 15
+    },
+    "L-5": {
+      "name": "L-5",
+      "agv": "AGV-01",
+      "route": [
+        "P-42",
+        "P-2",
+        "P-3",
+        "P-4",
+        "P-5",
+        "ATT",
+        "P-15",
+        "P-16",
+        "P-17",
+        "P-18",
+        "M-21",
+        "M-19",
+        "M-17",
+        "M-15",
+        "M-13",
+        "M-11",
+        "M-9",
+        "M-7",
+        "P-19",
+        "P-1",
+        "P-38"
+      ],
+      "pair": true,
+      "pairTimeout": 15
+    },
+    "L-6": {
+      "name": "L-6",
+      "agv": "AGV-02",
+      "route": [
+        "P-42",
+        "P-2",
+        "P-3",
+        "P-4",
+        "P-5",
+        "ATT",
+        "P-15",
+        "P-16",
+        "P-17",
+        "P-36",
+        "M-23",
+        "M-24",
+        "M-25",
+        "M-27",
+        "M-29",
+        "M-31",
+        "M-33",
+        "M-35",
+        "P-37",
+        "P-1",
+        "P-38"
+      ],
+      "pair": true,
+      "pairTimeout": 15
+    },
+    "L-7": {
+      "name": "L-7",
+      "agv": "AGV-02",
+      "route": [
+        "P-42",
+        "P-2",
+        "P-3",
+        "P-4",
+        "P-5",
+        "ATT",
+        "P-6",
+        "P-7",
+        "P-8",
+        "M-37",
+        "M-38",
+        "M-39",
+        "M-40",
+        "P-9",
+        "P-10",
+        "P-12",
+        "P-13",
+        "P-1",
+        "P-38"
+      ],
+      "pair": false,
+      "pairTimeout": 15
+    }
+  }
+}

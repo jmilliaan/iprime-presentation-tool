@@ -80,9 +80,12 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 - **Stations:** toggle **Action / Home**, then click to place them. The same bar also has **Machine /
   Attach / Share stop** for authoring loop-mode layouts — all drop **free-floating** at the click. A
   machine's serving AGV comes from the **loop** that contains it (assigned in *Loops* mode), so there's
-  no per-machine zone selector. See *Loop-dispatch mode* below.
+  no per-machine zone selector. A **Machines** panel (right) lists every machine — **double-click** one to
+  give it a friendly **display name** (the operational id `M-…` used in routes stays fixed). See
+  *Loop-dispatch mode* below.
 - **Loops:** (loops-mode authoring) **+ New loop**, pick its **AGV**, then click corners/machines in
-  travel order to build the route; right-click pops the last node. See *Loop-dispatch mode* below.
+  travel order to build the route; right-click pops the last node. **Double-click a loop's name** to
+  rename it (display only; the loop id stays). See *Loop-dispatch mode* below.
 - **Groups:** pick/create the active group (right panel), then click nodes in travel order. Clicking a
   **path corner** appends a pass-through; clicking an **action station** asks for the load (none/empty/
   full). Toggle **Add / Delete** in the group bar to add stops or remove an action stop by clicking it.

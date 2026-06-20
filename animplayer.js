@@ -797,7 +797,8 @@ function openTypePicker(machineId, clientX, clientY) {
   picker.innerHTML = '';
   const title = document.createElement('div');
   title.className = 'picker-label';
-  title.textContent = `Call trolley for ${machineId}`;
+  const mName = (state.nodes[machineId] && state.nodes[machineId].name) || machineId;
+  title.textContent = `Call trolley for ${mName}`;
   picker.appendChild(title);
   state.trolleyTypes.forEach(t => {
     const b = document.createElement('button');
@@ -1036,11 +1037,12 @@ function drawMachine(sx, sy, id, st) {
   ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.stroke();
 
   const q = (LoopDispatch.pendingByMachine()[id] || 0);
+  const label = (st && st.name) || id;             // visual name, else operational id
   ctx.fillStyle    = tint;
   ctx.font         = 'bold 9px monospace';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'bottom';
-  ctx.fillText(`${id}${q ? ` (${q})` : ''}`, sx, sy - r - 3);
+  ctx.fillText(`${label}${q ? ` (${q})` : ''}`, sx, sy - r - 3);
 }
 
 // Loop mode depot marker — the legacy store (load+unload) or the loops-mode

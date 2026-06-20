@@ -270,6 +270,7 @@ function normaliseLayout(data) {
     if (!s) continue;
     const role = STATION_ROLES.includes(s.role) ? s.role : 'action';
     stations[id] = { x: s.x, y: s.y, role, kind: 'station' };
+    if (s.name) stations[id].name = s.name;          // optional visual display name (id stays operational)
     if (role === 'tbm') {
       stations[id].agv  = s.agv || null;          // legacy zone allocation
       if (s.stop) stations[id].stop = s.stop;      // loops mode: route node it's serviced at
