@@ -284,7 +284,7 @@ const LoopDispatch = {
 
   _autoGen() {
     const L = loopdispatch;
-    const machines = Object.keys(L.machineAgv);
+    const machines = L.loopModel === 'loops' ? Object.keys(L.machineLoop) : Object.keys(L.machineAgv);
     if (!L.autoGenerate.enabled || machines.length === 0) return;
     while (L.simTime >= L.nextGenTime) {
       const m = machines[Math.floor(L.rng() * machines.length) % machines.length];

@@ -230,42 +230,6 @@ function hitStation(sx, sy) {
   }
   return null;
 }
-// Machines/store must be NODES on the loop ring (loop routing walks PATH edges),
-// yet the user should be able to drop them anywhere along a line. So we snap the
-// click to the nearest point on the nearest edge and SPLIT that edge there,
-// inserting a fresh corner that becomes the machine/store node.
-function projectToSegment(px, py, ax, ay, bx, by) {
-  const ex = bx - ax, ey = by - ay;
-  const len2 = ex * ex + ey * ey;
-  let t = len2 > 0 ? ((px - ax) * ex + (py - ay) * ey) / len2 : 0;
-  t = Math.max(0, Math.min(1, t));
-  const x = ax + ex * t, y = ay + ey * t;
-  return { x, y, dist: Math.hypot(px - x, py - y) };
-}
-// Nearest edge to an image-space point, with the projected point on it. null if no edges.
-function nearestEdge(ix, iy) {
-  let best = null;
-  for (const e of state.path.edges) {
-    const A = state.path.nodes[e.from], B = state.path.nodes[e.to];
-    if (!A || !B) continue;
-    const pr = projectToSegment(ix, iy, A.x, A.y, B.x, B.y);
-    if (!best || pr.dist < best.dist) best = { edge: e, x: pr.x, y: pr.y };
-  }
-  return best;
-}
-// Split `edge` at (x,y) by inserting `newId` as a corner: from→to becomes
-// from→newId and newId→to (direction + arc params preserved, so the one-way ring
-// stays intact).
-function splitEdgeAt(edge, x, y, newId) {
-  state.path.nodes[newId] = { x: Math.round(x), y: Math.round(y) };
-  const idx = state.path.edges.indexOf(edge);
-  const common = { type: edge.type };
-  if (edge.type === 'arc') { common.radius = edge.radius; common.clockwise = edge.clockwise; }
-  const e1 = { id: nextEdgeId(), from: edge.from, to: newId, ...common };
-  const e2 = { id: nextEdgeId(), from: newId, to: edge.to, ...common };
-  state.path.edges.splice(idx, 1, e1, e2);
-}
-
 // ── Naming ──────────────────────────────────────────────────────────────────
 
 function nextCornerId() { let n = state.pathPtN; while (state.path.nodes[`P-${n}`]) n++; state.pathPtN = n + 1; return `P-${n}`; }
@@ -436,7 +400,6 @@ function updateLastArc() {
 $('stActionBtn').addEventListener('click', () => { state.placeRole = 'action'; updateStationBar(); });
 $('stHomeBtn').addEventListener('click', () => { state.placeRole = 'home'; updateStationBar(); });
 $('stMachineBtn') && $('stMachineBtn').addEventListener('click', () => { state.placeRole = 'tbm'; updateStationBar(); });
-$('stStoreBtn')   && $('stStoreBtn').addEventListener('click', () => { state.placeRole = 'store'; updateStationBar(); });
 $('stAttachBtn')  && $('stAttachBtn').addEventListener('click', () => { state.placeRole = 'attach'; updateStationBar(); });
 $('stShareBtn')   && $('stShareBtn').addEventListener('click', () => { state.placeRole = 'share'; state.shareHost = null; updateStationBar(); });
 $('stZoneSelect') && $('stZoneSelect').addEventListener('change', (e) => { state.zoneAgv = e.target.value; });
@@ -445,9 +408,8 @@ function updateStationBar() {
   if (state.placeRole !== 'share') state.shareHost = null;
   $('stActionBtn').classList.toggle('active', state.placeRole === 'action');
   $('stHomeBtn').classList.toggle('active', state.placeRole === 'home');
-  const mb = $('stMachineBtn'), sb = $('stStoreBtn'), ab = $('stAttachBtn'), shb = $('stShareBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
+  const mb = $('stMachineBtn'), ab = $('stAttachBtn'), shb = $('stShareBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
   if (mb) mb.classList.toggle('active', state.placeRole === 'tbm');
-  if (sb) sb.classList.toggle('active', state.placeRole === 'store');
   if (ab) ab.classList.toggle('active', state.placeRole === 'attach');
   if (shb) shb.classList.toggle('active', state.placeRole === 'share');
   // Zone (serving AGV) selector — only relevant when placing machines.
@@ -466,8 +428,8 @@ function updateStationBar() {
   if (hint) {
     if (state.placeRole === 'tbm')
       hint.textContent = 'Click to drop a machine anywhere (free-floating) · click a corner to put it on the track · RClick=undo';
-    else if (state.placeRole === 'store' || state.placeRole === 'attach')
-      hint.textContent = 'Click on a path line — snaps onto it (splits the line) · RClick=undo';
+    else if (state.placeRole === 'attach')
+      hint.textContent = 'Click to drop the attach point anywhere (free-floating) · RClick=undo';
     else if (state.placeRole === 'share')
       hint.textContent = state.shareHost
         ? `Sharing → click the machine that joins ${state.shareHost}'s stop`
@@ -498,22 +460,14 @@ function onClickStation(sx, sy) {
     return;
   }
 
-  // Store / attach are depots on the spine: snap onto the nearest path line (or reuse
-  // a clicked corner), splitting the edge so they're a real route node. One each.
-  if (role === 'store' || role === 'attach') {
-    let cid = hitCorner(sx, sy);
-    if (!cid) {
-      const { ix, iy } = toImg(sx, sy);
-      const hit = nearestEdge(ix, iy);
-      if (!hit) { alert('Draw the track in Path mode first — store/attach snap onto the nearest path line.'); return; }
-      cid = nextCornerId();
-      splitEdgeAt(hit.edge, hit.x, hit.y, cid);
-    }
-    const p = state.path.nodes[cid];
+  // Attach is a free-floating depot (the AGV drives straight to it, like a machine),
+  // so it drops at the click — no path snapping. One per layout.
+  if (role === 'attach') {
+    const { ix, iy } = toImg(sx, sy);
     for (const id of Object.keys(state.stations))
-      if (state.stations[id].role === role) delete state.stations[id];   // single store / attach
-    state.stations[cid] = { x: p.x, y: p.y, role };
-    updatePathBar(); updateHud();
+      if (state.stations[id].role === 'attach') delete state.stations[id];   // single attach
+    state.stations['ATT'] = { x: Math.round(ix), y: Math.round(iy), role: 'attach' };
+    updateHud();
     return;
   }
 

@@ -118,8 +118,8 @@ valid roles; an unknown role falls back to `"action"`.
 | `action` | group | A stop where the AGV **sets its towed-trolley load** (to none/empty/full). Placed freely anywhere. |
 | `home` | both | A **parking / wait slot**, one per AGV. Listed in `HOME.slots`. In the loops model it is also the **unload** point. Excluded from group routes; added per-AGV automatically. |
 | `tbm` | loop | A **machine** (demand point). Zone model: carries `agv` = the **serving AGV** (its zone). Loops model: optional `stop` = the route node it's serviced at (default = its own id); two `tbm`s sharing a `stop` = a **shared stop**. |
-| `store` | loop (zone) | The single **load/unload** point of the legacy ring. One per zone-model layout. |
-| `attach` | loop (loops) | The shared **load** point (empties loaded here). One per loops-model layout; paired with per-AGV `home` unload. |
+| `store` | loop (zone) | The single **load/unload** point of the legacy ring. One per zone-model layout. **Legacy: still loaded/run, but no longer created by the Layout Picker.** |
+| `attach` | loop (loops) | The shared **load** point (empties loaded here). One per loops-model layout; paired with per-AGV `home` unload. Free-floating (the AGV drives straight to it). |
 
 Notes:
 - Only `tbm` stations carry `agv` (zone) and `stop` (loops shared stop). Other roles ignore them.
@@ -293,8 +293,10 @@ The loader sets mode purely from the flag: **`mode = (SIM.mode === "loop") ? "lo
 
 - It does **not** infer loop mode just because `tbm`/`store` stations exist. A file with machines but
   no `SIM.mode:"loop"` is treated as **group mode** (and those machines are effectively inert).
-- Files saved by the Layout Picker set `SIM.mode:"loop"` (and `SIM.store`) automatically whenever the
-  layout contains machines + a store. Hand-authored loop files **must** include `SIM.mode:"loop"`.
+- Files saved by the Layout Picker set `SIM.mode:"loop"` automatically: with a `LOOPS` definition it
+  also writes `SIM.attach` (loops sub-model). The Picker no longer authors a `store`, so `SIM.store`
+  appears only in legacy/hand-authored zone files. Hand-authored loop files **must** include
+  `SIM.mode:"loop"`.
 
 Within loop mode the engine picks the **sub-model** by data: if `LOOPS` is non-empty → **loops**
 (needs a valid `attach`, ≥1 machine mapped to a loop, ≥1 home, ≥1 AGV); otherwise → **zone** (needs a
@@ -319,9 +321,9 @@ arbitrary points. Understand this or you will misread zone-model files:
    `[store, n1, n2, …]`.
 3. A machine is only ever visited **if it is a node on that ring.** A `tbm` station that is *not* a
    path node (no edges through it) gets index "infinity" and is **never serviced** — the trolley is
-   loaded but never delivered. (This is why the authoring tool, when you drop a machine/store on a
-   line, inserts a corner at that point and splits the edge — so the new station id is always a real
-   ring node, in both `PATH.nodes` and `STATIONS`.)
+   loaded but never delivered. (For zone-model files, machines/the store must therefore sit on path
+   corners that form the ring. The loops sub-model removes this constraint entirely — machines are
+   free-floating and ordered by their position in `LOOPS[].route`.)
 4. `edges` therefore must form a **single one-way cycle** through the store and all machines.
 
 So when reading a loop file, reconstruct the ring by following the edges from `SIM.store`, and check

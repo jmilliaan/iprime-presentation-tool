@@ -77,9 +77,9 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 
 - **Path:** click empty space to drop a corner (it chains from the selected one); click a corner to
   select/connect; `A` toggles arc, with radius + CW/CCW controls; right-click undoes.
-- **Stations:** toggle **Action / Home**, then click to place them on the path. The same bar also has
-  **Machine / Store / Attach** (Machine carries a **Zone** AGV selector) for authoring loop-mode layouts
-  — see *Loop-dispatch mode* below.
+- **Stations:** toggle **Action / Home**, then click to place them. The same bar also has **Machine /
+  Attach / Share stop** (Machine carries a **Zone** AGV selector) for authoring loop-mode layouts — all
+  drop **free-floating** at the click. See *Loop-dispatch mode* below.
 - **Loops:** (loops-mode authoring) **+ New loop**, pick its **AGV**, then click corners/machines in
   travel order to build the route; right-click pops the last node. See *Loop-dispatch mode* below.
 - **Groups:** pick/create the active group (right panel), then click nodes in travel order. Clicking a
@@ -232,10 +232,10 @@ Shared behaviour (both models):
 
 **Authoring (Layout Picker):**
 1. **Path** mode — draw the track.
-2. **Stations** mode — place an **Attach** depot and per-AGV **Homes** (these **snap onto the nearest
-   path line**). Place **Machines** anywhere — they drop **free-floating** (click a corner only if you
-   want one *on* the track). Use **Share stop** to link two machines to one stopping position: click the
-   host machine, then the machine that joins it (sets its `stop`).
+2. **Stations** mode — place an **Attach** depot (one per layout) and per-AGV **Homes**. These and
+   **Machines** all drop **free-floating** at the click (click a corner if you want a machine *on* the
+   track). Use **Share stop** to link two machines to one stopping position: click the host machine, then
+   the machine that joins it (sets its `stop`).
 3. **Loops** mode (`5`) — **+ New loop**, pick its **AGV**, toggle **pair** + set its **timeout**, then
    click route nodes (corners + host machines) **in travel order**.
 
@@ -249,8 +249,10 @@ STU 1-6).
 Machines are path corners tagged `role:"tbm"` with a **serving AGV** (`agv`) — that allocation *is* the
 zone. One **store** (`role:"store"`) is the single load/unload point; the ring is derived from the drawn
 one-way cycle. The engine pairs **2 calls in one zone** (FCFS); a down AGV's machines are **funnelled**
-to the live AGV (zones dropped). Authored with **Machine** / **Store** in Stations mode. Example:
-[`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2 zones, a store and 2 AGVs.
+to the live AGV (zones dropped). This model is **retained for backward compatibility only** — such files
+still load, run, and render, but the Layout Picker no longer authors a **store**, so new layouts use the
+loops model. Example: [`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2
+zones, a store and 2 AGVs.
 
 ---
 
