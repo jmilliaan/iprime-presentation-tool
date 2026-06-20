@@ -46,7 +46,7 @@ const state = {
   pathSel: null, pathArc: false, pathR: 120, pathCW: true, pathPtN: 1, edgeN: 1,
   pathHistory: [],   // LIFO of {node?,edge?,prevSel} so right-click undoes a whole placement
   // STATION editing
-  placeRole: 'action', stationN: 1, homeN: 1,
+  placeRole: 'action', stationN: 1, homeN: 1, machineN: 1,
   // GROUP editing
   groupEditMode: 'add',
   // counters
@@ -135,7 +135,7 @@ $('confirmClearOk').addEventListener('click', () => {
   state.sim = { agvSpeed: 120, serviceTime: 3, requests: [],
                 autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
-  state.pathSel = null; state.pathHistory = []; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.groupN = 0;
+  state.pathSel = null; state.pathHistory = []; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.machineN = 1; state.groupN = 0;
   state.mode = 'PATH';
   loadJsonInput.value = ''; loadImgInput.value = '';
   filenameInput.value = 'coords.json'; state.outputFilename = 'coords.json';
@@ -203,6 +203,7 @@ function syncCounters() {
   const stIds = Object.keys(state.stations);
   state.stationN = Math.max(0, ...stIds.filter(i => i.startsWith('ST-')).map(i => num(i, 'ST-'))) + 1;
   state.homeN    = Math.max(0, ...stIds.filter(i => i.startsWith('HS-')).map(i => num(i, 'HS-'))) + 1;
+  state.machineN = Math.max(0, ...stIds.filter(i => i.startsWith('M-')).map(i => num(i, 'M-'))) + 1;
   state.groupN   = Object.keys(state.groups).length;
   state.loopN    = Object.keys(state.loops).length;
 }
@@ -270,6 +271,7 @@ function nextStationId(role) {
   if (role === 'home') { let n = state.homeN; while (state.stations[`HS-${n}`]) n++; state.homeN = n + 1; return `HS-${n}`; }
   let n = state.stationN; while (state.stations[`ST-${n}`]) n++; state.stationN = n + 1; return `ST-${n}`;
 }
+function nextMachineId() { let n = state.machineN; while (state.stations[`M-${n}`]) n++; state.machineN = n + 1; return `M-${n}`; }
 function nextGroupId() {
   let i = state.groupN;
   let id; do { id = 'G-' + String.fromCharCode(65 + (i % 26)) + (i >= 26 ? Math.floor(i / 26) : ''); i++; } while (state.groups[id]);
@@ -455,39 +457,54 @@ function updateStationBar() {
     });
   }
   const hint = $('stHint');
-  if (hint) hint.textContent = (state.placeRole === 'tbm' || state.placeRole === 'store' || state.placeRole === 'attach')
-    ? 'Click anywhere on a path line — drops it there (splits the line) · RClick=undo'
-    : 'Click=place (auto-links to nearest corner) · RClick=undo';
+  if (hint) {
+    if (state.placeRole === 'tbm')
+      hint.textContent = 'Click to drop a machine anywhere (free-floating) · click a corner to put it on the track · RClick=undo';
+    else if (state.placeRole === 'store' || state.placeRole === 'attach')
+      hint.textContent = 'Click on a path line — snaps onto it (splits the line) · RClick=undo';
+    else
+      hint.textContent = 'Click=place (auto-links to nearest corner) · RClick=undo';
+  }
 }
 
 function onClickStation(sx, sy) {
   const role = state.placeRole;
 
-  // Machines / store / attach sit ON the track, so they tag an existing path corner
-  // (keeping the id in both PATH.nodes and STATIONS — the loop-ring convention).
-  if (role === 'tbm' || role === 'store' || role === 'attach') {
-    // Reuse an existing corner if the click lands on one; otherwise snap onto the
-    // nearest line, creating a corner there (splitting that edge) so it is a real
-    // route node wherever it's dropped.
+  // Store / attach are depots on the spine: snap onto the nearest path line (or reuse
+  // a clicked corner), splitting the edge so they're a real route node. One each.
+  if (role === 'store' || role === 'attach') {
     let cid = hitCorner(sx, sy);
     if (!cid) {
       const { ix, iy } = toImg(sx, sy);
       const hit = nearestEdge(ix, iy);
-      if (!hit) { alert('Draw the track in Path mode first — machines/store/attach snap onto the nearest path line.'); return; }
+      if (!hit) { alert('Draw the track in Path mode first — store/attach snap onto the nearest path line.'); return; }
       cid = nextCornerId();
       splitEdgeAt(hit.edge, hit.x, hit.y, cid);
     }
     const p = state.path.nodes[cid];
-    if (role === 'store' || role === 'attach') {
-      for (const id of Object.keys(state.stations))
-        if (state.stations[id].role === role) delete state.stations[id];   // single store / attach
-      state.stations[cid] = { x: p.x, y: p.y, role };
-    } else {
-      const agv = state.zoneAgv || (state.agvs[0] && state.agvs[0].id) || null;
+    for (const id of Object.keys(state.stations))
+      if (state.stations[id].role === role) delete state.stations[id];   // single store / attach
+    state.stations[cid] = { x: p.x, y: p.y, role };
+    updatePathBar(); updateHud();
+    return;
+  }
+
+  // Machines drop free-floating at the click — the loops engine resolves them by
+  // position and route membership, so they need NOT be path corners. Clicking
+  // directly on an existing corner still reuses it (so zone-model layouts, where a
+  // machine must be a ring node, can place it on the path on purpose).
+  if (role === 'tbm') {
+    const agv = state.zoneAgv || (state.agvs[0] && state.agvs[0].id) || null;
+    const cid = hitCorner(sx, sy);
+    if (cid) {
+      const p = state.path.nodes[cid];
       state.stations[cid] = { x: p.x, y: p.y, role: 'tbm', agv };
+    } else {
+      const { ix, iy } = toImg(sx, sy);
+      const id = nextMachineId();
+      state.stations[id] = { x: Math.round(ix), y: Math.round(iy), role: 'tbm', agv };
     }
-    updatePathBar();
-    updateHud();
+    updatePathBar(); updateHud();
     return;
   }
 
