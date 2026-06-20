@@ -258,16 +258,22 @@ function normaliseLayout(data) {
 
   // STATIONS — positions only; no path link needed. Roles:
   //   action — group-mode load-setting stop
-  //   home   — AGV parking / waiting slot
-  //   tbm    — loop-mode machine (demand point); `agv` = its serving AGV (zone)
-  //   store  — loop-mode single load/unload area
-  const STATION_ROLES = ['action', 'home', 'tbm', 'store'];
+  //   home   — AGV parking / waiting slot (loops mode: also the unload point)
+  //   tbm    — loop-mode machine (demand point). Legacy zone mode: `agv` = serving
+  //            AGV. Loops mode: optional `stop` = the route node it's serviced at
+  //            (defaults to its own id); two tbms sharing a `stop` = a shared stop.
+  //   store  — legacy single load/unload area
+  //   attach — loops-mode shared load point (empties loaded here after a call)
+  const STATION_ROLES = ['action', 'home', 'tbm', 'store', 'attach'];
   const stations = {};
   for (const [id, s] of Object.entries(data.STATIONS || {})) {
     if (!s) continue;
     const role = STATION_ROLES.includes(s.role) ? s.role : 'action';
     stations[id] = { x: s.x, y: s.y, role, kind: 'station' };
-    if (role === 'tbm') stations[id].agv = s.agv || null;   // serving AGV (zone allocation)
+    if (role === 'tbm') {
+      stations[id].agv  = s.agv || null;          // legacy zone allocation
+      if (s.stop) stations[id].stop = s.stop;      // loops mode: route node it's serviced at
+    }
   }
 
   // AGVS — identities only (#AGVs should equal #home stations)
@@ -328,6 +334,17 @@ function normaliseLayout(data) {
   // HOME slots — valid station ids only
   const homeSlots = ((data.HOME && data.HOME.slots) || []).filter(id => stations[id]);
 
+  // LOOPS — loops-mode allocation: each loop has an owning AGV and an explicit
+  // ordered route over PATH corners + machines. Drop unknown agvs / route nodes.
+  const agvIdSet = new Set(agvs.map(a => a.id));
+  const loops = {};
+  for (const [id, l] of Object.entries(data.LOOPS || {})) {
+    if (!l) continue;
+    const route = (l.route || []).filter(n => nodeExists(n));
+    if (!route.length || !agvIdSet.has(l.agv)) continue;
+    loops[id] = { name: l.name || id, agv: l.agv, route };
+  }
+
   // SIM — optional playback config
   const rawSim = data.SIM || {};
   const ag     = rawSim.autoGenerate || {};
@@ -354,6 +371,9 @@ function normaliseLayout(data) {
     store:       (rawSim.store && stations[rawSim.store] && stations[rawSim.store].role === 'store')
                    ? rawSim.store
                    : (Object.keys(stations).find(id => stations[id].role === 'store') || null),
+    attach:      (rawSim.attach && stations[rawSim.attach] && stations[rawSim.attach].role === 'attach')
+                   ? rawSim.attach
+                   : (Object.keys(stations).find(id => stations[id].role === 'attach') || null),
     agvSpeed:    typeof rawSim.agvSpeed === 'number' ? rawSim.agvSpeed : 120,
     serviceTime: typeof rawSim.serviceTime === 'number' ? rawSim.serviceTime : 3,
     requests,
@@ -364,7 +384,7 @@ function normaliseLayout(data) {
     },
   };
 
-  return { path, stations, agvs, groups, calls, homeSlots, trolleyTypes, sim };
+  return { path, stations, agvs, groups, calls, homeSlots, trolleyTypes, loops, sim };
 }
 
 // ── Loop-ring routing (loop-dispatch mode) ─────────────────────────────────

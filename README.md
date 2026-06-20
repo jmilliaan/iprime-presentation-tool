@@ -70,16 +70,18 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 
 | Key | Mode | Key | Action |
 |-----|------|-----|--------|
-| `1` | Path     | `S` | Save JSON |
-| `2` | Stations | `A` | Toggle arc/straight (Path mode) |
-| `3` | Groups   | Right-click | Undo in current mode |
-| `4` | Call     | Scroll / MMB-drag | Zoom / Pan |
+| `1` | Path     | `5` | Loops |
+| `2` | Stations | `S` | Save JSON |
+| `3` | Groups   | `A` | Toggle arc/straight (Path mode) |
+| `4` | Call     | Right-click / Scroll / MMB-drag | Undo / Zoom / Pan |
 
 - **Path:** click empty space to drop a corner (it chains from the selected one); click a corner to
   select/connect; `A` toggles arc, with radius + CW/CCW controls; right-click undoes.
 - **Stations:** toggle **Action / Home**, then click to place them on the path. The same bar also has
-  **Machine / Store** (with a **Zone** AGV selector) for authoring loop-mode layouts — see *Loop-dispatch
-  mode* below.
+  **Machine / Store / Attach** (Machine carries a **Zone** AGV selector) for authoring loop-mode layouts
+  — see *Loop-dispatch mode* below.
+- **Loops:** (loops-mode authoring) **+ New loop**, pick its **AGV**, then click corners/machines in
+  travel order to build the route; right-click pops the last node. See *Loop-dispatch mode* below.
 - **Groups:** pick/create the active group (right panel), then click nodes in travel order. Clicking a
   **path corner** appends a pass-through; clicking an **action station** asks for the load (none/empty/
   full). Toggle **Add / Delete** in the group bar to add stops or remove an action stop by clicking it.
@@ -156,12 +158,13 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 | Section | Notes |
 |---------|-------|
 | `PATH.nodes / edges` | Corners and their straight/arc connections — a drawn guide for clicking. |
-| `STATIONS[].role` | `action` (group-mode load-setting stop), `home` (parking slot), `tbm` (loop-mode machine; carries `agv` = its serving AGV/zone), or `store` (loop-mode load/unload point). Position only — no path link. Unknown roles fall back to `action`. |
+| `STATIONS[].role` | `action` (group-mode load-setting stop), `home` (parking / unload slot), `tbm` (loop-mode machine; carries `agv` = its zone, and optional `stop` = the route node it's serviced at), `store` (legacy single load/unload), or `attach` (loops-mode shared load point). Position only — no path link. Unknown roles fall back to `action`. |
 | `GROUPS[].stops[]` | Explicit ordered nodes: `{ node, action }` (+ optional `dwell`, `label`, and `mode:"manual"` to draw a person at the stop). `action` ∈ `move \| none \| empty \| full` (sets the towed-trolley load; `move` = pass-through). `node` is a path corner or a station; home is excluded. |
 | `GROUPS[].homeStart / homeEnd` | Optional action at the assigned AGV's own home (before leaving / on return): `none \| attach-empty \| attach-full \| detach-empty \| detach-full`. |
 | `CALLS[]` | `{ x, y, group }` → a free-floating on-canvas call button. |
 | `HOME.slots[]` | Home-station ids, one slot per AGV (**#AGVs = #home slots**; AGV *i* parks at slot *i*). |
-| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`. Loop mode adds `mode:"loop"`, `store` (store node id), `trainSize` (trolleys per train, default 2), and `pairTimeout` (seconds a lone call waits before a single trip, default 200). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
+| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`. Loop mode adds `mode:"loop"`, `trainSize` (trolleys per train, default 2), `pairTimeout` (seconds a lone call waits before a single trip, default 200), and either `attach` (loops model — shared load node) or `store` (legacy zone model). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
+| `LOOPS` | Loops model only: `id → { name, agv, route:[nodeId…] }` — an owning AGV + an explicit ordered route (corners + machines). Its presence selects the loops engine over the legacy zone engine. |
 
 > Legacy files using `CALL_STATIONS` and `pickup/release/exchange` still load (converted automatically).
 > Note: old `homeStart/homeEnd` values (`empty`/`full`/`none`) are **not** migrated — re-pick them as
@@ -183,42 +186,59 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 
 ## Loop-dispatch mode (TBM trolley system)
 
-Alongside the default **group/FIFO** model, a layout can opt into **loop mode** — a simulation of the
-factory trolley-dispatch system: machines on a **one-way loop**, AGVs that tow a **train of trolleys**
-(2 by default, set via `SIM.trainSize`), and **zoned pairing**. The player picks the engine
-automatically from the layout (`SIM.mode: "loop"`); everything else (play/pause, recording, geometric
-collision) is shared.
+Alongside the default **group/FIFO** model, a layout can opt into **loop mode** (`SIM.mode:"loop"`) — a
+simulation of the factory trolley-dispatch system: machines that get **calls**, AGVs that tow a **train
+of trolleys** (2 by default, `SIM.trainSize`), and **pairing**. The player picks the engine
+automatically; everything else (play/pause, recording, geometric collision) is shared. Loop mode has
+**two allocation models**, chosen by whether the layout defines `LOOPS`:
 
-How it works:
+- **Loops model** (`LOOPS` present) — the realistic plant: a **branched** track with several **loops**,
+  each a fixed route owned by one AGV; an AGV owns **several loops**. *(Primary model.)*
+- **Legacy zone model** (no `LOOPS`, just a `store`) — one **single one-way ring** with per-machine AGV
+  **zones**. Older loop files keep working unchanged.
 
-- **Machines (TBMs)** are path corners tagged with `role:"tbm"` and a **serving AGV** (`agv`) — that
-  allocation *is* the zone. Any number of machines (layout-driven). One **store** (`role:"store"`) is
-  the single load/unload point; each AGV parks at its own **home/wait** slot.
-- **Calls** are per-machine and per **trolley type** (6 types; a layout may define `TROLLEY_TYPES`).
-  In the player, **click a machine → pick a type** to call an empty trolley. Each machine has a status
-  **LED**: *off* (idle) → *blink* (queued / loading) → *solid* (AGV en route) → *off* (serviced).
-- **Pairing:** the engine waits for **2 calls in one zone**, then dispatches that zone's AGV with a
-  2-stop trip (FCFS). A lone call dispatches as a **single-trolley trip** after `pairTimeout` (200 s).
-  Calls in **different zones never pair**.
-- **Visit + loading order:** stops are visited in **loop order**; the train is loaded so the **rear**
-  trolley serves the **first** stop (easy detach) and the **front** serves the **second**. The store
-  "PREPARE" overlay shows the front/rear types to load. At each machine the empty is swapped for a full
-  (full type is not tracked); the AGV completes the loop back to the store and parks.
-- **Degraded mode:** toggle an AGV **down** in the player toolbar → the other AGV serves **all**
-  machines (zones dropped) until it's back.
-- **Traffic:** the same **geometric** collision engine resolves catch-up/merge on the shared loop (the
+Shared behaviour (both models):
+
+- **Machines (TBMs)** are tagged `role:"tbm"`. **Calls** are per-machine and per **trolley type** (6
+  types; a layout may define `TROLLEY_TYPES`). In the player, **click a machine → pick a type** to call
+  an empty trolley. Each machine has a status **LED**: *off* (idle) → *blink* (queued / loading) →
+  *solid* (AGV en route) → *off* (serviced).
+- **Train + loading order:** stops are visited in route order; the train is loaded so the **rear**
+  trolley serves the **first** stop (easy detach) and the **front** the **second**. The "PREPARE"
+  overlay shows the front/rear types. At each machine the empty is swapped for a full (full type not
+  tracked).
+- **Traffic:** the same **geometric** collision engine resolves catch-up/merge on the shared spine (the
   AGV closer to finishing its route proceeds); no RFID conflict table is needed.
 
-**Authoring (Layout Picker):** draw the loop in **Path** mode (corners + one-way edges forming a single
-cycle), then in **Stations** mode use **Machine** / **Store** to tag corners — for machines, pick the
-**Zone AGV** first so each machine is allocated to a serving AGV. You don't need a corner there: drop a
-machine/store **anywhere along a line** and it **snaps onto the nearest edge**, inserting a corner at
-that point (so loop routing can still reach it — clicking directly on an existing corner reuses it
-instead). Place **Home** wait spots near the store. Saving a layout with machines + a store sets
-`SIM.mode:"loop"` automatically.
+### Loops model (`LOOPS`)
 
-A ready example is [`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2 zones,
-a store and 2 AGVs.
+- A **loop** is a first-class object: `LOOPS[id] = { name, agv, route }` — an **owning AGV** and an
+  **explicit ordered route** (path corners + machines). A machine belongs to the loop whose route
+  contains it (or its `stop` node). An AGV owns **one or more** loops and runs **one loop per trip**.
+- **Per-loop pairing:** 2 calls pair **only if on the same loop**; an AGV with calls on two of its loops
+  runs them as **separate trips** (loops never merge). A lone call dispatches as a single after
+  `pairTimeout` (200 s).
+- **Attach + home:** empties load at a shared **attach** node (`role:"attach"`, `SIM.attach`); fulls
+  unload at each AGV's own **home** slot. A trip is `home → attach(load) → route(swaps) → home(unload)`.
+- **Shared stops:** two machines can be serviced at one route position — give a machine a
+  `stop` (a route node id, default = its own id); both empties are delivered in a **single** stop/dwell.
+- **Degraded mode:** toggle an AGV **down** → its loops **stall** (its calls wait); the other AGV is
+  **not** reassigned its loops.
+
+**Authoring (Layout Picker):** in **Path** mode draw the track; in **Stations** mode place machines, an
+**Attach** depot, and per-AGV **Homes** (Machine/Store/Attach **snap onto the nearest path line**,
+splitting it). Then in **Loops** mode (`5`) press **+ New loop**, pick its **AGV**, and click route
+nodes (corners + machines) **in travel order**. Saving a layout that has `LOOPS` sets `SIM.mode:"loop"`
+and `SIM.attach` automatically. A ready example is [`sample_loops.json`](sample_loops.json) — the *103
+Tyre Building* plant: 2 AGVs, **4 loops**, 38 machines, a shared attach and a shared stop.
+
+### Legacy zone model (`store`)
+
+Machines are path corners tagged `role:"tbm"` with a **serving AGV** (`agv`) — that allocation *is* the
+zone. One **store** (`role:"store"`) is the single load/unload point; the ring is derived from the drawn
+one-way cycle. The engine pairs **2 calls in one zone** (FCFS); a down AGV's machines are **funnelled**
+to the live AGV (zones dropped). Authored with **Machine** / **Store** in Stations mode. Example:
+[`sample_loop.json`](sample_loop.json) — a one-way loop, 8 machines across 2 zones, a store and 2 AGVs.
 
 ---
 

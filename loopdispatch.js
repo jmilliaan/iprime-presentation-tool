@@ -17,16 +17,27 @@
 
 const loopdispatch = {
   mode:        'idle',       // 'idle' | 'loop'
+  loopModel:   'zone',       // 'zone' (legacy single-ring) | 'loops' (per-loop)
+  // ── zone model (legacy) ──
   store:       null,         // store node id (single load/unload)
   ring:        [],           // ordered loop node ids from store
   ringIndex:   {},           // nodeId -> index in ring
+  machineAgv:  {},           // machineId -> serving AGV id (zone allocation)
+  // ── loops model ──
+  attach:      null,         // shared load node (empties loaded here)
+  loops:       {},           // loopId -> { name, agv, route:[nodeId…] }
+  machineLoop: {},           // machineId -> owning loopId
+  loopAgv:     {},           // loopId -> agvId
+  agvLoops:    {},           // agvId -> [loopId…]
+  machineStop: {},           // machineId -> route node it's serviced at
+  routeIndex:  {},           // loopId -> { nodeId: index }
+  // ── shared ──
   trolleyTypes: [],
   serviceTime: 3,
   trainSize:   2,
   pairTimeout: 200,          // seconds a lone call waits before a single-trolley trip
   homeSlots:   [],
-  machineAgv:  {},           // machineId -> serving AGV id (zone allocation)
-  downAgvs:    new Set(),    // AGVs flagged offline → single-AGV degraded mode
+  downAgvs:    new Set(),    // AGVs flagged offline (loops: their loops stall)
   queue:       [],           // FIFO of calls { machine, type, t }
   led:         {},           // machineId -> 'off' | 'blink' | 'solid'
   rng:         Math.random,
@@ -42,10 +53,6 @@ const LoopDispatch = {
 
   init(layout) {
     const L = loopdispatch;
-    L.store        = layout.sim.store || null;
-    L.ring         = buildLoopRing(layout.path, L.store);
-    L.ringIndex    = {};
-    L.ring.forEach((id, i) => { L.ringIndex[id] = i; });
     L.trolleyTypes = layout.trolleyTypes || [];
     L.serviceTime  = layout.sim.serviceTime;
     L.trainSize    = layout.sim.trainSize || 2;
@@ -55,11 +62,51 @@ const LoopDispatch = {
     L.autoGenerate = layout.sim.autoGenerate;
     L.queue        = [];
     L.downAgvs     = new Set();
+    const agvIds   = (layout.agvs || []).map(a => a.id);
+
+    // A layout with LOOPS uses the per-loop model; otherwise the legacy zone model.
+    L.loopModel = Object.keys(layout.loops || {}).length > 0 ? 'loops' : 'zone';
+
+    if (L.loopModel === 'loops') {
+      L.loops      = layout.loops || {};
+      L.attach     = layout.sim.attach || null;
+      L.store = null; L.ring = []; L.ringIndex = {}; L.machineAgv = {};
+      L.loopAgv = {}; L.agvLoops = {}; L.routeIndex = {}; L.machineLoop = {}; L.machineStop = {};
+
+      // Each loop: owning AGV + a route-position index. machineStop defaults to the
+      // machine's own id (a machine sitting on its loop's route).
+      for (const [lid, lp] of Object.entries(L.loops)) {
+        L.loopAgv[lid] = lp.agv;
+        (L.agvLoops[lp.agv] = L.agvLoops[lp.agv] || []).push(lid);
+        L.routeIndex[lid] = {};
+        lp.route.forEach((n, i) => { L.routeIndex[lid][n] = i; });
+      }
+      for (const [id, s] of Object.entries(layout.stations || {})) {
+        if (s.role !== 'tbm') continue;
+        const stopNode = s.stop || id;
+        L.machineStop[id] = stopNode;
+        // A machine belongs to the loop whose route contains its stop node.
+        const lid = Object.keys(L.loops).find(l => L.routeIndex[l][stopNode] !== undefined);
+        if (lid) L.machineLoop[id] = lid;
+      }
+
+      const haveMachines = Object.keys(L.machineLoop).length > 0;
+      L.mode = (L.attach && haveMachines && L.homeSlots.length > 0
+                && Object.keys(L.loopAgv).length > 0 && agvIds.length > 0) ? 'loop' : 'idle';
+      L.led = {};
+      Object.keys(L.machineLoop).forEach(id => { L.led[id] = 'off'; });
+      return L.mode === 'loop';
+    }
+
+    // ── legacy zone model ──
+    L.store        = layout.sim.store || null;
+    L.ring         = buildLoopRing(layout.path, L.store);
+    L.ringIndex    = {};
+    L.ring.forEach((id, i) => { L.ringIndex[id] = i; });
 
     // machine -> serving AGV (zone). Fall back to round-robin over AGVs if a
     // machine has no explicit allocation, so a partially-authored layout still runs.
     L.machineAgv = {};
-    const agvIds = (layout.agvs || []).map(a => a.id);
     let rr = 0;
     for (const [id, s] of Object.entries(layout.stations || {})) {
       if (s.role !== 'tbm') continue;
@@ -89,7 +136,8 @@ const LoopDispatch = {
   // A call selects a machine + the empty-trolley type to deliver.
   enqueue(req) {
     const L = loopdispatch;
-    if (L.mode !== 'loop' || !req || !L.machineAgv[req.machine]) return;
+    const known = req && (L.loopModel === 'loops' ? L.machineLoop[req.machine] : L.machineAgv[req.machine]);
+    if (L.mode !== 'loop' || !known) return;
     const type = (req.type && L.trolleyTypes.some(t => t.id === req.type))
       ? req.type : (L.trolleyTypes[0] && L.trolleyTypes[0].id);
     L.queue.push({ machine: req.machine, type, t: L.simTime });
@@ -121,7 +169,12 @@ const LoopDispatch = {
 
   queueLength() { return loopdispatch.queue.length; },
   ledState(machineId) { return loopdispatch.led[machineId] || 'off'; },
-  servingAgv(machineId) { return loopdispatch.machineAgv[machineId] || null; },
+  servingAgv(machineId) {
+    const L = loopdispatch;
+    return L.loopModel === 'loops'
+      ? (L.loopAgv[L.machineLoop[machineId]] || null)
+      : (L.machineAgv[machineId] || null);
+  },
   isDown(agvId) { return loopdispatch.downAgvs.has(agvId); },
 
   pendingByMachine() {
@@ -139,6 +192,7 @@ const LoopDispatch = {
   runningSnapshot() {
     return state.agvs.filter(w => w.job).map(w => ({
       agv: w.id,
+      loop: w.loopId ? (loopdispatch.loops[w.loopId]?.name || w.loopId) : null,
       stops: (w.tripStops || []).slice(),
       train: (w.train || []).map(s => ({ slot: s.slot, type: s.type, state: s.state })),
       state: this.stateLabel(w),
@@ -181,7 +235,7 @@ const LoopDispatch = {
 
   _slotNodeId(i) {
     const hs = loopdispatch.homeSlots;
-    return hs[i] || hs[hs.length - 1] || loopdispatch.store || null;
+    return hs[i] || hs[hs.length - 1] || loopdispatch.store || loopdispatch.attach || null;
   },
 
   _parkAll() {
@@ -198,6 +252,7 @@ const LoopDispatch = {
       w.load        = 'none';
       w.train       = [];
       w.tripStops   = [];
+      w.loopId      = null;
       w.phase       = 'parked';
       w.job         = null;
       w.waiting     = false;
@@ -209,6 +264,7 @@ const LoopDispatch = {
       if (w.job && w.phase === 'done') {
         w.phase     = 'parked';
         w.job       = null;
+        w.loopId    = null;
         w.sequence  = [];
         w.currentStep = 0;
         w.train     = [];
@@ -253,6 +309,7 @@ const LoopDispatch = {
   // Per idle live AGV, pull its servable calls in FCFS order and dispatch a pair
   // (or a single after the timeout). Each AGV pairs only within its own bucket.
   _assign() {
+    if (loopdispatch.loopModel === 'loops') return this._assignLoops();
     const L = loopdispatch;
     for (const w of state.agvs) {
       if (w.phase !== 'parked' || L.downAgvs.has(w.id)) continue;
@@ -274,11 +331,34 @@ const LoopDispatch = {
     }
   },
 
+  // Loops model: bucket pending calls by LOOP (not by AGV). For each idle AGV's
+  // loops, pair 2 calls on that loop (or 1 after timeout) and run one trip. Loops
+  // never merge; a down AGV is skipped entirely so its loops stall.
+  _assignLoops() {
+    const L = loopdispatch;
+    for (const w of state.agvs) {
+      if (w.phase !== 'parked' || L.downAgvs.has(w.id)) continue;
+      for (const lid of (L.agvLoops[w.id] || [])) {
+        const mine = L.queue.filter(c => L.machineLoop[c.machine] === lid);
+        if (mine.length === 0) continue;
+        let take;
+        if (mine.length >= 2) take = mine.slice(0, this.trainSizeCap());
+        else if (L.simTime - mine[0].t >= L.pairTimeout) take = [mine[0]];
+        else continue;
+        const taken = new Set(take);
+        L.queue = L.queue.filter(c => !taken.has(c));
+        this._startTrip(w, take, lid);
+        break;   // one trip per AGV per pass
+      }
+    }
+  },
+
   trainSizeCap() { return Math.max(1, loopdispatch.trainSize); },
 
   // Build the loop route + train for a paired (or single) trip.
-  _startTrip(w, calls) {
+  _startTrip(w, calls, loopId) {
     const L = loopdispatch;
+    if (L.loopModel === 'loops') return this._startTripLoops(w, calls, loopId);
     if (!w.homeSlot || !L.store || L.ring.length === 0) return;
 
     // Visit order = loop position. REAR = first stop (easy detach), FRONT = second.
@@ -320,20 +400,77 @@ const LoopDispatch = {
     routeWalkerToStep(w);
   },
 
+  // Loops model: build one loop's trip. Calls grouped by the route node they're
+  // serviced at (shared stop = 2 machines at one node, delivered in one dwell);
+  // stop-groups ordered by route position; REAR = first stop, FRONT = second.
+  // Sequence: home → attach(load) → route swaps → home(unload).
+  _startTripLoops(w, calls, loopId) {
+    const L = loopdispatch;
+    const lp = L.loops[loopId];
+    if (!w.homeSlot || !L.attach || !lp) return;
+    const idx = L.routeIndex[loopId];
+
+    const byStop = new Map();                       // stopNode -> [calls]
+    for (const c of calls) {
+      const sn = L.machineStop[c.machine] || c.machine;
+      if (!byStop.has(sn)) byStop.set(sn, []);
+      byStop.get(sn).push(c);
+    }
+    const stopNodes = [...byStop.keys()].sort((a, b) => (idx[a] ?? 1e9) - (idx[b] ?? 1e9));
+
+    const slotOrder = ['rear', 'front'];
+    const train = [];
+    const deliverAt = new Map();                    // stopNode -> [{slot, machine, type}]
+    let si = 0;
+    for (const sn of stopNodes) {
+      const arr = [];
+      for (const c of byStop.get(sn)) {
+        const slot = slotOrder[si++] || 'front';
+        train.push({ slot, type: c.type, state: 'empty', machine: c.machine });
+        arr.push({ slot, machine: c.machine, type: c.type });
+      }
+      deliverAt.set(sn, arr);
+    }
+
+    const seq = [{ node: L.attach, action: 'load', dwell: L.serviceTime, attach: true }];
+    for (const node of lp.route) {
+      if (deliverAt.has(node)) {
+        seq.push({ node, action: 'swap', dwell: L.serviceTime, machine: node, slots: deliverAt.get(node) });
+      } else {
+        seq.push({ node, action: 'move' });
+      }
+    }
+    seq.push({ node: w.homeSlot, action: 'unload', dwell: L.serviceTime, home: true });
+
+    w.job         = 'loop';
+    w.loopId      = loopId;
+    w.tripStops   = calls.map(c => c.machine);
+    w.train       = train;
+    w.sequence    = seq;
+    w.currentStep = 0;
+    w.actionTimer = 0;
+    w.waiting     = false;
+    routeWalkerToStep(w);
+  },
+
   // LED per machine: blink while a call is queued or its trip is loading at store;
   // solid once the serving AGV has departed and the stop is still ahead; off when
   // serviced (the AGV has passed that swap).
   _recomputeLed() {
     const L = loopdispatch;
     const led = {};
-    Object.keys(L.machineAgv).forEach(id => { led[id] = 'off'; });
-    L.queue.forEach(c => { led[c.machine] = 'blink'; });
+    const machineIds = L.loopModel === 'loops' ? Object.keys(L.machineLoop) : Object.keys(L.machineAgv);
+    machineIds.forEach(id => { led[id] = 'off'; });
+    L.queue.forEach(c => { if (led[c.machine] !== undefined) led[c.machine] = 'blink'; });
     for (const w of state.agvs) {
       if (!w.job) continue;
-      const loading = w.sequence[w.currentStep]?.action === 'load';   // still at store
+      const loading = w.sequence[w.currentStep]?.action === 'load';   // still loading empties
       for (let k = w.currentStep; k < w.sequence.length; k++) {
         const s = w.sequence[k];
-        if (s.action === 'swap' && s.machine) led[s.machine] = loading ? 'blink' : 'solid';
+        if (s.action !== 'swap') continue;
+        // A swap delivers to one machine (zone) or several (loops shared stop).
+        const machines = Array.isArray(s.slots) ? s.slots.map(d => d.machine) : (s.machine ? [s.machine] : []);
+        machines.forEach(m => { if (led[m] !== undefined) led[m] = loading ? 'blink' : 'solid'; });
       }
     }
     L.led = led;

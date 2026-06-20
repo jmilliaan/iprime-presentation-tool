@@ -1,0 +1,803 @@
+{
+  "PATH": {
+    "nodes": {
+      "ATT": {
+        "x": 1150,
+        "y": 380
+      },
+      "HOME-1": {
+        "x": 1185,
+        "y": 338
+      },
+      "HOME-2": {
+        "x": 1185,
+        "y": 422
+      },
+      "P-L1a": {
+        "x": 880,
+        "y": 92
+      },
+      "P-L1b": {
+        "x": 200,
+        "y": 150
+      },
+      "MRU4": {
+        "x": 740,
+        "y": 92
+      },
+      "MRU3": {
+        "x": 600,
+        "y": 92
+      },
+      "MRU2": {
+        "x": 460,
+        "y": 92
+      },
+      "MRU1": {
+        "x": 320,
+        "y": 92
+      },
+      "P-L2a": {
+        "x": 1075,
+        "y": 200
+      },
+      "P-L2b": {
+        "x": 235,
+        "y": 232
+      },
+      "BTU16": {
+        "x": 1020,
+        "y": 200
+      },
+      "BTU15": {
+        "x": 920,
+        "y": 200
+      },
+      "BTU14": {
+        "x": 820,
+        "y": 200
+      },
+      "BTU13": {
+        "x": 720,
+        "y": 200
+      },
+      "BTU12": {
+        "x": 620,
+        "y": 200
+      },
+      "BTU11": {
+        "x": 520,
+        "y": 200
+      },
+      "BTU10": {
+        "x": 420,
+        "y": 200
+      },
+      "BTU9": {
+        "x": 320,
+        "y": 200
+      },
+      "BTU24": {
+        "x": 1020,
+        "y": 262
+      },
+      "BTU23": {
+        "x": 920,
+        "y": 262
+      },
+      "BTU22": {
+        "x": 820,
+        "y": 262
+      },
+      "BTU21": {
+        "x": 720,
+        "y": 262
+      },
+      "BTU20": {
+        "x": 620,
+        "y": 262
+      },
+      "BTU19": {
+        "x": 520,
+        "y": 262
+      },
+      "BTU18": {
+        "x": 420,
+        "y": 262
+      },
+      "BTU17": {
+        "x": 320,
+        "y": 262
+      },
+      "P-L3a": {
+        "x": 1075,
+        "y": 332
+      },
+      "P-L3b": {
+        "x": 235,
+        "y": 364
+      },
+      "P-SS3": {
+        "x": 560,
+        "y": 392
+      },
+      "BTU8": {
+        "x": 1020,
+        "y": 332
+      },
+      "BTU7": {
+        "x": 920,
+        "y": 332
+      },
+      "BTU6": {
+        "x": 820,
+        "y": 332
+      },
+      "BTU5": {
+        "x": 720,
+        "y": 332
+      },
+      "BTU4": {
+        "x": 620,
+        "y": 332
+      },
+      "BTU3": {
+        "x": 520,
+        "y": 332
+      },
+      "BTU2": {
+        "x": 420,
+        "y": 332
+      },
+      "BTU1": {
+        "x": 320,
+        "y": 332
+      },
+      "STU4": {
+        "x": 700,
+        "y": 392
+      },
+      "STU3": {
+        "x": 800,
+        "y": 392
+      },
+      "STU2": {
+        "x": 900,
+        "y": 392
+      },
+      "STU1": {
+        "x": 1000,
+        "y": 392
+      },
+      "STU5": {
+        "x": 600,
+        "y": 392
+      },
+      "STU6": {
+        "x": 500,
+        "y": 392
+      },
+      "P-L4a": {
+        "x": 1010,
+        "y": 470
+      },
+      "P-L4b": {
+        "x": 260,
+        "y": 470
+      },
+      "STU10": {
+        "x": 850,
+        "y": 470
+      },
+      "STU9": {
+        "x": 700,
+        "y": 470
+      },
+      "STU8": {
+        "x": 550,
+        "y": 470
+      },
+      "STU7": {
+        "x": 400,
+        "y": 470
+      }
+    },
+    "edges": [
+      {
+        "from": "HOME-1",
+        "to": "ATT"
+      },
+      {
+        "from": "HOME-2",
+        "to": "ATT"
+      },
+      {
+        "from": "ATT",
+        "to": "P-L1a"
+      },
+      {
+        "from": "P-L1a",
+        "to": "MRU4"
+      },
+      {
+        "from": "MRU4",
+        "to": "MRU3"
+      },
+      {
+        "from": "MRU3",
+        "to": "MRU2"
+      },
+      {
+        "from": "MRU2",
+        "to": "MRU1"
+      },
+      {
+        "from": "MRU1",
+        "to": "P-L1b"
+      },
+      {
+        "from": "P-L1b",
+        "to": "HOME-1"
+      },
+      {
+        "from": "ATT",
+        "to": "P-L2a"
+      },
+      {
+        "from": "P-L2a",
+        "to": "BTU16"
+      },
+      {
+        "from": "BTU16",
+        "to": "BTU15"
+      },
+      {
+        "from": "BTU15",
+        "to": "BTU14"
+      },
+      {
+        "from": "BTU14",
+        "to": "BTU13"
+      },
+      {
+        "from": "BTU13",
+        "to": "BTU12"
+      },
+      {
+        "from": "BTU12",
+        "to": "BTU11"
+      },
+      {
+        "from": "BTU11",
+        "to": "BTU10"
+      },
+      {
+        "from": "BTU10",
+        "to": "BTU9"
+      },
+      {
+        "from": "BTU9",
+        "to": "P-L2b"
+      },
+      {
+        "from": "P-L2b",
+        "to": "BTU24"
+      },
+      {
+        "from": "BTU24",
+        "to": "BTU23"
+      },
+      {
+        "from": "BTU23",
+        "to": "BTU22"
+      },
+      {
+        "from": "BTU22",
+        "to": "BTU21"
+      },
+      {
+        "from": "BTU21",
+        "to": "BTU20"
+      },
+      {
+        "from": "BTU20",
+        "to": "BTU19"
+      },
+      {
+        "from": "BTU19",
+        "to": "BTU18"
+      },
+      {
+        "from": "BTU18",
+        "to": "BTU17"
+      },
+      {
+        "from": "BTU17",
+        "to": "HOME-1"
+      },
+      {
+        "from": "STU5",
+        "to": "P-SS3"
+      },
+      {
+        "from": "STU6",
+        "to": "P-SS3"
+      },
+      {
+        "from": "ATT",
+        "to": "P-L3a"
+      },
+      {
+        "from": "P-L3a",
+        "to": "BTU8"
+      },
+      {
+        "from": "BTU8",
+        "to": "BTU7"
+      },
+      {
+        "from": "BTU7",
+        "to": "BTU6"
+      },
+      {
+        "from": "BTU6",
+        "to": "BTU5"
+      },
+      {
+        "from": "BTU5",
+        "to": "BTU4"
+      },
+      {
+        "from": "BTU4",
+        "to": "BTU3"
+      },
+      {
+        "from": "BTU3",
+        "to": "BTU2"
+      },
+      {
+        "from": "BTU2",
+        "to": "BTU1"
+      },
+      {
+        "from": "BTU1",
+        "to": "P-L3b"
+      },
+      {
+        "from": "P-L3b",
+        "to": "P-SS3"
+      },
+      {
+        "from": "P-SS3",
+        "to": "STU4"
+      },
+      {
+        "from": "STU4",
+        "to": "STU3"
+      },
+      {
+        "from": "STU3",
+        "to": "STU2"
+      },
+      {
+        "from": "STU2",
+        "to": "STU1"
+      },
+      {
+        "from": "STU1",
+        "to": "HOME-2"
+      },
+      {
+        "from": "ATT",
+        "to": "P-L4a"
+      },
+      {
+        "from": "P-L4a",
+        "to": "STU10"
+      },
+      {
+        "from": "STU10",
+        "to": "STU9"
+      },
+      {
+        "from": "STU9",
+        "to": "STU8"
+      },
+      {
+        "from": "STU8",
+        "to": "STU7"
+      },
+      {
+        "from": "STU7",
+        "to": "P-L4b"
+      },
+      {
+        "from": "P-L4b",
+        "to": "HOME-2"
+      }
+    ]
+  },
+  "STATIONS": {
+    "ATT": {
+      "role": "attach",
+      "x": 1150,
+      "y": 380
+    },
+    "HOME-1": {
+      "role": "home",
+      "x": 1185,
+      "y": 338
+    },
+    "HOME-2": {
+      "role": "home",
+      "x": 1185,
+      "y": 422
+    },
+    "MRU4": {
+      "role": "tbm",
+      "x": 740,
+      "y": 92
+    },
+    "MRU3": {
+      "role": "tbm",
+      "x": 600,
+      "y": 92
+    },
+    "MRU2": {
+      "role": "tbm",
+      "x": 460,
+      "y": 92
+    },
+    "MRU1": {
+      "role": "tbm",
+      "x": 320,
+      "y": 92
+    },
+    "BTU16": {
+      "role": "tbm",
+      "x": 1020,
+      "y": 200
+    },
+    "BTU15": {
+      "role": "tbm",
+      "x": 920,
+      "y": 200
+    },
+    "BTU14": {
+      "role": "tbm",
+      "x": 820,
+      "y": 200
+    },
+    "BTU13": {
+      "role": "tbm",
+      "x": 720,
+      "y": 200
+    },
+    "BTU12": {
+      "role": "tbm",
+      "x": 620,
+      "y": 200
+    },
+    "BTU11": {
+      "role": "tbm",
+      "x": 520,
+      "y": 200
+    },
+    "BTU10": {
+      "role": "tbm",
+      "x": 420,
+      "y": 200
+    },
+    "BTU9": {
+      "role": "tbm",
+      "x": 320,
+      "y": 200
+    },
+    "BTU24": {
+      "role": "tbm",
+      "x": 1020,
+      "y": 262
+    },
+    "BTU23": {
+      "role": "tbm",
+      "x": 920,
+      "y": 262
+    },
+    "BTU22": {
+      "role": "tbm",
+      "x": 820,
+      "y": 262
+    },
+    "BTU21": {
+      "role": "tbm",
+      "x": 720,
+      "y": 262
+    },
+    "BTU20": {
+      "role": "tbm",
+      "x": 620,
+      "y": 262
+    },
+    "BTU19": {
+      "role": "tbm",
+      "x": 520,
+      "y": 262
+    },
+    "BTU18": {
+      "role": "tbm",
+      "x": 420,
+      "y": 262
+    },
+    "BTU17": {
+      "role": "tbm",
+      "x": 320,
+      "y": 262
+    },
+    "BTU8": {
+      "role": "tbm",
+      "x": 1020,
+      "y": 332
+    },
+    "BTU7": {
+      "role": "tbm",
+      "x": 920,
+      "y": 332
+    },
+    "BTU6": {
+      "role": "tbm",
+      "x": 820,
+      "y": 332
+    },
+    "BTU5": {
+      "role": "tbm",
+      "x": 720,
+      "y": 332
+    },
+    "BTU4": {
+      "role": "tbm",
+      "x": 620,
+      "y": 332
+    },
+    "BTU3": {
+      "role": "tbm",
+      "x": 520,
+      "y": 332
+    },
+    "BTU2": {
+      "role": "tbm",
+      "x": 420,
+      "y": 332
+    },
+    "BTU1": {
+      "role": "tbm",
+      "x": 320,
+      "y": 332
+    },
+    "STU4": {
+      "role": "tbm",
+      "x": 700,
+      "y": 392
+    },
+    "STU3": {
+      "role": "tbm",
+      "x": 800,
+      "y": 392
+    },
+    "STU2": {
+      "role": "tbm",
+      "x": 900,
+      "y": 392
+    },
+    "STU1": {
+      "role": "tbm",
+      "x": 1000,
+      "y": 392
+    },
+    "STU5": {
+      "role": "tbm",
+      "stop": "P-SS3",
+      "x": 600,
+      "y": 392
+    },
+    "STU6": {
+      "role": "tbm",
+      "stop": "P-SS3",
+      "x": 500,
+      "y": 392
+    },
+    "STU10": {
+      "role": "tbm",
+      "x": 850,
+      "y": 470
+    },
+    "STU9": {
+      "role": "tbm",
+      "x": 700,
+      "y": 470
+    },
+    "STU8": {
+      "role": "tbm",
+      "x": 550,
+      "y": 470
+    },
+    "STU7": {
+      "role": "tbm",
+      "x": 400,
+      "y": 470
+    }
+  },
+  "AGVS": [
+    {
+      "id": "AGV-01",
+      "color": "#E63946"
+    },
+    {
+      "id": "AGV-02",
+      "color": "#4080e0"
+    }
+  ],
+  "LOOPS": {
+    "L-1": {
+      "name": "MRU 1-4",
+      "agv": "AGV-01",
+      "route": [
+        "P-L1a",
+        "MRU4",
+        "MRU3",
+        "MRU2",
+        "MRU1",
+        "P-L1b"
+      ]
+    },
+    "L-2": {
+      "name": "BTU 9-24",
+      "agv": "AGV-01",
+      "route": [
+        "P-L2a",
+        "BTU16",
+        "BTU15",
+        "BTU14",
+        "BTU13",
+        "BTU12",
+        "BTU11",
+        "BTU10",
+        "BTU9",
+        "P-L2b",
+        "BTU24",
+        "BTU23",
+        "BTU22",
+        "BTU21",
+        "BTU20",
+        "BTU19",
+        "BTU18",
+        "BTU17"
+      ]
+    },
+    "L-3": {
+      "name": "BTU 1-8 + STU 1-6",
+      "agv": "AGV-02",
+      "route": [
+        "P-L3a",
+        "BTU8",
+        "BTU7",
+        "BTU6",
+        "BTU5",
+        "BTU4",
+        "BTU3",
+        "BTU2",
+        "BTU1",
+        "P-L3b",
+        "P-SS3",
+        "STU4",
+        "STU3",
+        "STU2",
+        "STU1"
+      ]
+    },
+    "L-4": {
+      "name": "STU 7-10",
+      "agv": "AGV-02",
+      "route": [
+        "P-L4a",
+        "STU10",
+        "STU9",
+        "STU8",
+        "STU7",
+        "P-L4b"
+      ]
+    }
+  },
+  "HOME": {
+    "slots": [
+      "HOME-1",
+      "HOME-2"
+    ]
+  },
+  "TROLLEY_TYPES": [
+    {
+      "id": "TT-1",
+      "name": "Type 1",
+      "color": "#E63946"
+    },
+    {
+      "id": "TT-2",
+      "name": "Type 2",
+      "color": "#4080e0"
+    },
+    {
+      "id": "TT-3",
+      "name": "Type 3",
+      "color": "#1a9c50"
+    },
+    {
+      "id": "TT-4",
+      "name": "Type 4",
+      "color": "#cc44aa"
+    },
+    {
+      "id": "TT-5",
+      "name": "Type 5",
+      "color": "#e08a1e"
+    },
+    {
+      "id": "TT-6",
+      "name": "Type 6",
+      "color": "#16a0a0"
+    }
+  ],
+  "SIM": {
+    "mode": "loop",
+    "attach": "ATT",
+    "trainSize": 2,
+    "pairTimeout": 200,
+    "agvSpeed": 130,
+    "serviceTime": 3,
+    "autoGenerate": {
+      "enabled": false,
+      "meanInterval": 8,
+      "seed": 1234
+    },
+    "requests": [
+      {
+        "t": 1,
+        "machine": "MRU2",
+        "type": "TT-1"
+      },
+      {
+        "t": 2,
+        "machine": "MRU4",
+        "type": "TT-3"
+      },
+      {
+        "t": 3,
+        "machine": "BTU12",
+        "type": "TT-2"
+      },
+      {
+        "t": 4,
+        "machine": "BTU20",
+        "type": "TT-5"
+      },
+      {
+        "t": 1,
+        "machine": "STU5",
+        "type": "TT-4"
+      },
+      {
+        "t": 2,
+        "machine": "STU6",
+        "type": "TT-6"
+      },
+      {
+        "t": 5,
+        "machine": "STU8",
+        "type": "TT-1"
+      },
+      {
+        "t": 6,
+        "machine": "STU10",
+        "type": "TT-2"
+      }
+    ]
+  }
+}

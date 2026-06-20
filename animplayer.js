@@ -215,14 +215,15 @@ function applyActionEffect(seqE, nodePos, w) {
   const action = seqE?.action;
   if (!action || action === 'move') return;
 
-  // Loop-mode train actions. The train is loaded with 2 empties at dispatch; at
-  // each machine the delivered empty is removed and a full attached (type
-  // untracked); at the store the fulls are removed.
+  // Loop-mode train actions. The train is loaded with empties at attach/store; at
+  // each machine the delivered empty is swapped for a full (type untracked); at
+  // the unload point (store / home) the fulls are removed.
   if (action === 'load')   return;                       // empties already on the train
   if (action === 'unload') { w.train = []; return; }
   if (action === 'swap') {
-    const t = (w.train || []).find(s => s.slot === seqE.slot);
-    if (t) t.state = 'full';                             // empty swapped for a full
+    // Deliver to one slot (zone mode) or several (loops shared stop) in one dwell.
+    const slots = Array.isArray(seqE.slots) ? seqE.slots.map(d => d.slot) : [seqE.slot];
+    slots.forEach(sl => { const t = (w.train || []).find(s => s.slot === sl); if (t) t.state = 'full'; });
     return;
   }
 
@@ -529,7 +530,7 @@ function updateLoopQueuePanel() {
   const items = [
     ...running.map(r => ({
       state: 'running', name: r.agv,
-      detail: `stops ${r.stops.join(' → ') || '—'} · ${r.state}`,
+      detail: `${r.loop ? r.loop + ' · ' : ''}stops ${r.stops.join(' → ') || '—'} · ${r.state}`,
       sub: r.train.map(s => `${s.slot}:${s.state === 'full' ? 'FULL' : typeName(s.type)}`).join('  '),
     })),
     ...pending.map(p => ({
@@ -1037,18 +1038,19 @@ function drawMachine(sx, sy, id, st) {
   ctx.fillText(`${id}${q ? ` (${q})` : ''}`, sx, sy - r - 3);
 }
 
-// Loop mode: the single load/unload store.
-function drawStoreMarker(sx, sy, id) {
+// Loop mode depot marker — the legacy store (load+unload) or the loops-mode
+// attach node (empties loaded here). A labelled square.
+function drawDepotMarker(sx, sy, label, fill) {
   const r = CALL_BTN_RADIUS + 3;
   ctx.beginPath();
   ctx.rect(sx - r, sy - r, r * 2, r * 2);
-  ctx.fillStyle   = '#34406a'; ctx.fill();
+  ctx.fillStyle   = fill; ctx.fill();
   ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
   ctx.fillStyle    = '#ffffff';
-  ctx.font         = 'bold 8px monospace';
+  ctx.font         = 'bold 7px monospace';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('STORE', sx, sy);
+  ctx.fillText(label, sx, sy);
 }
 
 function drawActivePulse(sx, sy, t) {
@@ -1141,7 +1143,9 @@ function drawScene(timestamp) {
     if (st.role === 'tbm') {
       drawMachine(sx, sy, id, st);
     } else if (st.role === 'store') {
-      drawStoreMarker(sx, sy, id);
+      drawDepotMarker(sx, sy, 'STORE', '#34406a');
+    } else if (st.role === 'attach') {
+      drawDepotMarker(sx, sy, 'ATTACH', '#2a7d5f');
     } else if (st.role === 'home') {
       ctx.beginPath();
       ctx.rect(sx - DOT_RADIUS, sy - DOT_RADIUS, DOT_RADIUS * 2, DOT_RADIUS * 2);
@@ -1154,7 +1158,7 @@ function drawScene(timestamp) {
       ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1; ctx.stroke();
     }
 
-    if (state.showLabels && st.role !== 'tbm' && st.role !== 'store') {
+    if (state.showLabels && st.role !== 'tbm' && st.role !== 'store' && st.role !== 'attach') {
       ctx.fillStyle    = '#1a1a2a';
       ctx.font         = '10px monospace';
       ctx.textAlign    = 'left';
@@ -1362,7 +1366,7 @@ function drawLoopOverlay(cw, ch) {
   if (prep.length) {
     prep.forEach(p => lines.push({ kind: 'prep', text: `PREPARE ${p.agv}: front=${typeName(p.front)}  rear=${typeName(p.rear)}` }));
   }
-  running.forEach(r => lines.push({ kind: 'run', text: `${r.agv} → ${r.stops.join(',') || '—'} · ${r.state}` }));
+  running.forEach(r => lines.push({ kind: 'run', text: `${r.agv}${r.loop ? ' [' + r.loop + ']' : ''} → ${r.stops.join(',') || '—'} · ${r.state}` }));
   pending.slice(0, 4).forEach(p => lines.push({ kind: 'pend', text: `call ${p.machine} · ${typeName(p.type)}` }));
 
   const titleH = 22, rowH = 18;

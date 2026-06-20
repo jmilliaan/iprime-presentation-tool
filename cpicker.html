@@ -16,7 +16,7 @@
   <!-- Mode legend / shortcuts (top-left) -->
   <div id="typeLegend">
     <div class="legend-row"><b>[1]</b>&nbsp;Path&nbsp;&nbsp;<b>[2]</b>&nbsp;Stations</div>
-    <div class="legend-row"><b>[3]</b>&nbsp;Groups&nbsp;&nbsp;<b>[4]</b>&nbsp;Call</div>
+    <div class="legend-row"><b>[3]</b>&nbsp;Groups&nbsp;&nbsp;<b>[4]</b>&nbsp;Call&nbsp;&nbsp;<b>[5]</b>&nbsp;Loops</div>
     <div class="legend-row" style="color:#888;">[S] save · RClick=undo · scroll=zoom · MMB=pan</div>
   </div>
 
@@ -25,6 +25,13 @@
     <div class="panel-title">GROUPS</div>
     <div id="groupsBody"></div>
     <button id="newGroupBtn" class="agv-add-btn">+ New group</button>
+  </div>
+
+  <!-- Loops panel (right) — used in LOOPS mode -->
+  <div id="loopsPanel" style="display:none;">
+    <div class="panel-title">LOOPS</div>
+    <div id="loopsBody"></div>
+    <button id="newLoopBtn" class="agv-add-btn">+ New loop</button>
   </div>
 
   <!-- Sim / fleet panel (left, above HUD) -->
@@ -68,6 +75,7 @@
     <button class="track-seg-btn" id="stHomeBtn">Home</button>
     <button class="track-seg-btn" id="stMachineBtn">Machine</button>
     <button class="track-seg-btn" id="stStoreBtn">Store</button>
+    <button class="track-seg-btn" id="stAttachBtn">Attach</button>
     <div id="stZoneWrap" style="display:none;align-items:center;gap:4px;">
       <span class="details-label">Zone AGV</span>
       <select id="stZoneSelect" style="font-family:monospace;font-size:12px;padding:2px 4px;"></select>
@@ -92,6 +100,16 @@
     <span class="details-label">Call points</span>
     <div class="details-sep"></div>
     <span class="details-hint">Click anywhere → choose a group · RClick a marker = remove it</span>
+  </div>
+
+  <!-- Loops mode hint bar -->
+  <div id="loopsBar">
+    <span id="loopsBarLabel" class="details-label">No active loop</span>
+    <div class="details-sep"></div>
+    <span class="details-label">AGV</span>
+    <select id="loopAgvSelect" style="font-family:monospace;font-size:12px;padding:2px 4px;"></select>
+    <div class="details-sep"></div>
+    <span class="details-hint">Place an Attach + per-AGV Homes first · click corners/machines in travel order · RClick=undo last</span>
   </div>
 
   <!-- Load picker (GROUP/home: set the AGV's towed-trolley load) -->

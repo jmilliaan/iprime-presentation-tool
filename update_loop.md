@@ -1,10 +1,14 @@
 # Update: loop dispatch is moving from AGV→ZONE to AGV→LOOPS
 
-> **Read this if your mental model of "loop mode" is "each AGV owns a *zone* (a flat set of
-> machines) on one big ring, and the engine pairs any 2 calls in that zone."** That model is being
-> replaced. This document explains the change, the target model, and what in the code/schema must
-> change. Pair it with [JSON_FORMAT.md](JSON_FORMAT.md) (current format) and the loop section of
-> [README.md](README.md) (current behaviour).
+> **STATUS: IMPLEMENTED.** The AGV→LOOPS model described here now ships. The loops engine, the `LOOPS`
+> schema, the `attach`/per-AGV-`home` nodes, shared stops, stall-on-down, and Layout Picker **Loops**
+> authoring are all live; the legacy zone model is kept as a fallback. See [JSON_FORMAT.md](JSON_FORMAT.md)
+> §4.6b / §11b and the loop section of [README.md](README.md) for the as-built format and behaviour. The
+> §7 open items are resolved (below). This document is retained for design rationale.
+>
+> **Original framing (for context):** read this if your mental model of "loop mode" is "each AGV owns a
+> *zone* (a flat set of machines) on one big ring, and the engine pairs any 2 calls in that zone." That
+> model has been replaced (the zone path is retained only for backward compatibility).
 
 ---
 
@@ -165,17 +169,22 @@ Derived at load time:
 
 ---
 
-## 7. Open / unconfirmed items (do not treat as settled)
+## 7. Open items — RESOLVED
 
-- **trainSize stays 2 per trip** (clear loops a few machines at a time) — *assumed*, pending final OK.
-- **Loop routes authored explicitly** (vs auto-derived) — *assumed yes* (branched track forces it).
-- **Attach node** is a single shared node; "wait for confirm" is a fixed dwell (`serviceTime`) —
-  *assumed yes*.
-- **One stop ↔ two machines**: how to model a position that services two machines (two trolleys at one
-  stop? two independent calls funnelling to one stop?) — **unresolved**.
-- **Degraded mode** semantics under loops (reassign a down AGV's loops?) — **unresolved**.
-- **Layout Picker authoring** of loops (drawing a route + assigning its AGV) does not exist yet — needs
-  design.
+- **trainSize stays 2 per trip** — ✅ confirmed. A loop with many pending calls clears `trainSize` (2)
+  machines per trip over multiple trips.
+- **Loop routes authored explicitly** (vs auto-derived) — ✅ yes. `LOOPS[].route` is an explicit ordered
+  node list; `buildLoopRing` is no longer used in the loops model.
+- **Attach node** single shared node; confirm = fixed `serviceTime` dwell — ✅ yes (`role:"attach"`,
+  `SIM.attach`).
+- **One stop ↔ two machines** — ✅ **modelled**. A `tbm` carries an optional `stop` (a route node id);
+  two machines sharing a `stop` are serviced at that one position, both trolleys delivered in a single
+  dwell. (Assumes ≤ `trainSize` machines per shared stop.)
+- **Degraded mode under loops** — ✅ **stall** (no reassignment). A down AGV's loops simply wait; the
+  other AGV is not given them (their home/attach geometry differs).
+- **Layout Picker authoring of loops** — ✅ shipped. **Loops** mode (`5`): create a loop, pick its AGV,
+  click route nodes in order; **Attach** added to the Stations bar. Saving a layout with `LOOPS` sets
+  `SIM.mode:"loop"` + `SIM.attach` automatically.
 
 ---
 

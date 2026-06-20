@@ -23,10 +23,17 @@ targets:
 | Mode | `SIM.mode` | What it models | Key sections used |
 |------|-----------|----------------|-------------------|
 | **Group / FIFO** (default) | absent or anything ≠ `"loop"` | On-demand multi-stop delivery jobs, dispatched FIFO to idle AGVs | `GROUPS`, `CALLS`, `STATIONS(action/home)` |
-| **Loop / zoned-pairing** | `"loop"` | Machines on a one-way loop; AGVs tow a train of trolleys; calls are paired per zone | `STATIONS(tbm/store)`, `TROLLEY_TYPES`, loop fields in `SIM` |
+| **Loop** | `"loop"` | Machines that get typed calls; AGVs tow a train of trolleys; calls are paired | `STATIONS(tbm/attach/store/home)`, `TROLLEY_TYPES`, `LOOPS`, loop fields in `SIM` |
 
 A file is almost always *one or the other*. Identify the mode first; it changes how you read
 `STATIONS` and `SIM.requests`.
+
+**Loop mode has two allocation sub-models**, distinguished by whether the file defines a `LOOPS` object:
+
+| Sub-model | Selector | Allocation | Load / unload | Pairing bucket |
+|-----------|----------|-----------|---------------|----------------|
+| **Loops** | `LOOPS` present | An AGV owns several **loops** (each a route + machine set) | **attach** node loads; per-AGV **home** unloads | per **loop** |
+| **Zone** (legacy) | no `LOOPS`, has a `store` | Each machine owned by an AGV (`tbm.agv`) = its **zone**; one global ring | single **store** does both | per **AGV/zone** |
 
 ---
 
@@ -52,6 +59,7 @@ A file is almost always *one or the other*. Identify the mode first; it changes 
   "TROLLEY_TYPES": [ {id,name,color}, … ],   // optional; loop mode only
   "GROUPS":        { …id → {name,stops,homeStart,homeEnd} },   // group mode
   "CALLS":         [ {x,y,group}, … ],        // group mode
+  "LOOPS":         { …id → {name,agv,route} }, // loop mode (loops sub-model)
   "HOME":          { "slots": [stationId, …] },
   "SIM":           { …playback config + request script }
 }
@@ -95,25 +103,28 @@ field is present; assume the loader filled a default.
 "STATIONS": {
   "HS-1": { "x": 175, "y": 180, "role": "home" },
   "LA":   { "x": 848, "y": 180, "role": "action" },
-  "M1":   { "x": 220, "y": 120, "role": "tbm", "agv": "AGV-01" },
-  "ST":   { "x": 120, "y": 400, "role": "store" }
+  "M1":   { "x": 220, "y": 120, "role": "tbm", "agv": "AGV-01" },   // zone model
+  "S2":   { "x": 360, "y": 120, "role": "tbm", "stop": "P-10" },    // loops: serviced at P-10
+  "ATT":  { "x": 900, "y": 400, "role": "attach" },                 // loops model
+  "ST":   { "x": 120, "y": 400, "role": "store" }                   // zone model
 }
 ```
 
-A station is a named point with a **`role`** that determines its behavior. There are exactly four
+A station is a named point with a **`role`** that determines its behavior. There are exactly five
 valid roles; an unknown role falls back to `"action"`.
 
 | `role` | Mode | Meaning |
 |--------|------|---------|
 | `action` | group | A stop where the AGV **sets its towed-trolley load** (to none/empty/full). Placed freely anywhere. |
-| `home` | both | A **parking / wait slot**, one per AGV. Listed in `HOME.slots`. Excluded from group routes; added per-AGV automatically. Placed freely. |
-| `tbm` | loop | A **machine** (demand point) on the loop. Carries `agv` = the **serving AGV**, which defines its **zone**. |
-| `store` | loop | The single **load/unload** point of the loop. Exactly one per loop layout. |
+| `home` | both | A **parking / wait slot**, one per AGV. Listed in `HOME.slots`. In the loops model it is also the **unload** point. Excluded from group routes; added per-AGV automatically. |
+| `tbm` | loop | A **machine** (demand point). Zone model: carries `agv` = the **serving AGV** (its zone). Loops model: optional `stop` = the route node it's serviced at (default = its own id); two `tbm`s sharing a `stop` = a **shared stop**. |
+| `store` | loop (zone) | The single **load/unload** point of the legacy ring. One per zone-model layout. |
+| `attach` | loop (loops) | The shared **load** point (empties loaded here). One per loops-model layout; paired with per-AGV `home` unload. |
 
 Notes:
-- Only `tbm` stations carry an `agv` field (zone allocation). Other roles ignore it.
-- **A `tbm`/`store` station id usually equals a `PATH.nodes` id** — the same id appears in *both*
-  `PATH.nodes` and `STATIONS`. This is intentional and load-bearing; see §6 ("loop-ring convention").
+- Only `tbm` stations carry `agv` (zone) and `stop` (loops shared stop). Other roles ignore them.
+- **A `tbm`/`store`/`attach` station id usually equals a `PATH.nodes` id** — the same id appears in
+  *both* `PATH.nodes` and `STATIONS`. Load-bearing for routing; see §6.
 - `action`/`home` station ids are independent of path corners (e.g. `HS-1`, `LA`) and are *not* on the
   path graph — the AGV just drives straight to their coordinates.
 
@@ -194,6 +205,29 @@ A free-floating clickable button at `(x,y)` that, when clicked in the player, en
 `group`. `group` must be a valid key of `GROUPS` (else dropped). Purely an *input device* — it does
 not constrain routing.
 
+### 4.6b `LOOPS` — loop routes (loops sub-model)
+
+```jsonc
+"LOOPS": {
+  "L-1": { "name": "MRU loop", "agv": "AGV-01",
+           "route": ["P-10", "MRU1", "MRU2", "MRU3", "MRU4", "P-11"] }
+}
+```
+
+Present **only** in the loops sub-model; its presence selects the loops engine. Each loop is:
+
+- `name` — a human label.
+- `agv` — the **owning AGV** (must be an `AGVS` id, else the loop is dropped). An AGV may own several
+  loops; it runs **one loop per trip** and never merges loops.
+- `route` — an **explicit ordered list of node ids** (path corners + machines) the AGV drives, from the
+  first node *after* attach to the last node *before* returning home. Nodes not in `PATH.nodes`/`STATIONS`
+  are dropped. There is **no pathfinding** — straight legs between consecutive route nodes (like a group).
+
+**Machine → loop** is derived: a `tbm` belongs to the loop whose `route` contains it, or contains its
+`stop` node (shared stop). A machine in zero or multiple routes is a layout error. **Pairing buckets by
+loop:** two calls pair only if on the same loop. The engine wraps each trip as
+`home → attach(load) → route(swap at each called machine) → home(unload)`.
+
 ### 4.7 `HOME` — parking slot assignment
 
 ```jsonc
@@ -233,10 +267,14 @@ Shared fields:
 
 ```jsonc
 "mode": "loop",
-"store": "ST",          // store node id (load/unload point)
 "trainSize": 2,         // trolleys per train / max calls paired per trip (default 2)
-"pairTimeout": 200      // s a lone call waits before going as a single-trolley trip (default 200)
+"pairTimeout": 200,     // s a lone call waits before going as a single-trolley trip (default 200)
+"attach": "ATT",        // loops model: shared load node id (paired with per-AGV home unload)
+"store": "ST"           // zone model: single load/unload node id
 ```
+
+A loops-model file sets `attach`; a zone-model file sets `store`. Each resolves to the first station of
+that role if the named one is missing/invalid.
 
 ---
 
@@ -249,15 +287,20 @@ The loader sets mode purely from the flag: **`mode = (SIM.mode === "loop") ? "lo
 - Files saved by the Layout Picker set `SIM.mode:"loop"` (and `SIM.store`) automatically whenever the
   layout contains machines + a store. Hand-authored loop files **must** include `SIM.mode:"loop"`.
 
-For a loop file to actually *run*, the loop engine additionally requires: a valid `store`, a non-empty
-ring built from it, at least one machine, and at least one AGV. If any are missing it goes inert.
+Within loop mode the engine picks the **sub-model** by data: if `LOOPS` is non-empty → **loops**
+(needs a valid `attach`, ≥1 machine mapped to a loop, ≥1 home, ≥1 AGV); otherwise → **zone** (needs a
+valid `store`, a non-empty ring built from it, ≥1 machine, ≥1 AGV). If the requirements aren't met the
+loop engine goes inert.
 
 ---
 
-## 6. The loop-ring convention (critical for loop files)
+## 6. The loop-ring convention (critical for **zone-model** loop files)
 
-Loop mode routes by **walking the `PATH` graph as a directed cycle**, not by straight lines between
-arbitrary points. Understand this or you will misread loop files:
+> Applies to the **zone sub-model only**. In the **loops sub-model** routing follows each `LOOPS[].route`
+> explicitly (§4.6b) — `buildLoopRing` is not used, and machines need not form a single cycle.
+
+The zone model routes by **walking the `PATH` graph as a directed cycle**, not by straight lines between
+arbitrary points. Understand this or you will misread zone-model files:
 
 1. **Machines and the store are simultaneously `PATH.nodes` AND `STATIONS`** — the *same id* in both.
    E.g. in a loop file you'll see `"M1"` under `PATH.nodes` *and* `"M1"` under `STATIONS` with
@@ -283,7 +326,9 @@ The file is passed through a normalizer before use. To read a file the way the a
 
 - **PATH.edges:** drop edges with missing endpoints; `type→straight`, `radius→100`, `clockwise→true`
   defaults.
-- **STATIONS:** clamp `role` to `action|home|tbm|store` (else `action`); keep `agv` only for `tbm`.
+- **STATIONS:** clamp `role` to `action|home|tbm|store|attach` (else `action`); keep `agv` and `stop`
+  only for `tbm`.
+- **LOOPS:** drop loops whose `agv` isn't an `AGVS` id; filter `route` to existing nodes; drop empty.
 - **AGVS:** fill `id`/`color` defaults.
 - **TROLLEY_TYPES:** default 6-type palette if absent/empty.
 - **GROUPS.stops:** drop stops whose `node` doesn't exist; map `action` to `move|none|empty|full`
@@ -293,8 +338,9 @@ The file is passed through a normalizer before use. To read a file the way the a
 - **CALLS:** keep only those with a valid `group` and numeric `x,y`.
 - **HOME.slots:** keep only ids that are real stations.
 - **SIM:** `agvSpeed→120`, `serviceTime→3`, `trainSize→2`, `pairTimeout→200`,
-  `autoGenerate.meanInterval→6`, `autoGenerate.seed→1234`; resolve `store` (use `SIM.store` if it's a
-  valid store station, else the first `store` station found, else null); parse `requests` per mode.
+  `autoGenerate.meanInterval→6`, `autoGenerate.seed→1234`; resolve `store` and `attach` (use the named
+  station if it's a valid `store`/`attach`, else the first of that role, else null); parse `requests`
+  per mode.
 
 ---
 
@@ -306,9 +352,12 @@ When validating a file, check:
 - Every `HOME.slots[i]` is a `home`-role station.
 - Every `CALLS[].group` and every group-mode `requests[].group` is a key of `GROUPS`.
 - Every `GROUPS[].stops[].node` is a `PATH.nodes` id or a `STATIONS` id.
-- **Loop:** exactly one `store`; `SIM.store` matches it; every `tbm` has a valid `agv` that exists in
-  `AGVS`; every `tbm` and the `store` are reachable on the ring (§6); `edges` form one directed cycle.
-- **Loop:** `requests[].machine` is a `tbm`; `requests[].type` is a `TROLLEY_TYPES` id.
+- **Loop (zone):** exactly one `store`; `SIM.store` matches it; every `tbm` has a valid `agv` in `AGVS`;
+  every `tbm` and the `store` are reachable on the ring (§6); `edges` form one directed cycle.
+- **Loop (loops):** exactly one `attach`; `SIM.attach` matches it; every `LOOPS[].agv` is in `AGVS`;
+  every `tbm` is on **exactly one** loop's `route` (directly or via its `stop`); a shared `stop` serves
+  ≤ `trainSize` machines; per-AGV `HOME.slots` cover every AGV that owns a loop.
+- **Loop (both):** `requests[].machine` is a `tbm`; `requests[].type` is a `TROLLEY_TYPES` id.
 
 ---
 
@@ -343,13 +392,13 @@ full sequence becomes `HS-1 → P-H → P-4 → LA(set load none) → P-4 → P-
 `LA` (serviceTime), 0 s at `move` nodes. Meanwhile G-B/G-C go to AGV-02/03. At t=70 the pinned G-A
 request will only be served by AGV-01 (others wait behind it in FIFO).
 
-## 11. Worked reading — a loop file
+## 11. Worked reading — a loop file (zone model)
 
 Given (abridged from `sample_loop.json`):
 
 - `PATH` nodes form one cycle: `ST → A → M1 → M2 → M3 → M4 → B → C → M5 → M6 → M7 → M8 → D → ST`.
 - `STATIONS`: `ST` is `store`; `M1..M4` are `tbm` served by **AGV-01** (zone 1); `M5..M8` are `tbm`
-  served by **AGV-02** (zone 2); `HS1/HS2` are homes.
+  served by **AGV-02** (zone 2); `HS1/HS2` are homes. No `LOOPS` → **zone** sub-model.
 - `SIM`: `mode:"loop"`, `store:"ST"`, `pairTimeout:200`, 6 trolley types; scripted calls at t=1..4 on
   M2/M4 (zone 1) and M6/M8 (zone 2).
 
@@ -357,8 +406,24 @@ How it runs: the ring is built from `ST` following the edges. Calls bucket by zo
 for M2 (TT-1) and M4 (TT-3); once it has 2, AGV-01 dispatches a paired trip. Stops are ordered by ring
 position (M2 before M4), the train is loaded **rear = first stop (M2), front = second (M4)**, and the
 route is `ST(load) → … → M2(swap) → … → M4(swap) → … → ST(unload) → HS1`. Zone 2 does the same with
-AGV-02 for M6/M8. A lone call with no partner would wait up to `pairTimeout` (200 s) then go as a
-single-trolley trip.
+AGV-02 for M6/M8. A lone call with no partner would wait up to `pairTimeout` (200 s) then go single.
+
+## 11b. Worked reading — a loop file (loops model)
+
+Given (abridged from `sample_loops.json`, the *103 Tyre Building* plant):
+
+- `STATIONS`: one `attach` (`ATT`), two `home`s (`HOME-1/2`), 38 `tbm` machines. `STU5`/`STU6` carry
+  `stop:"P-SS3"` — a **shared stop**.
+- `LOOPS`: `L-1` (AGV-01, MRU 1-4), `L-2` (AGV-01, BTU 9-24), `L-3` (AGV-02, BTU 1-8 + STU 1-6),
+  `L-4` (AGV-02, STU 7-10). So AGV-01 owns L-1 & L-2; AGV-02 owns L-3 & L-4.
+- `SIM`: `mode:"loop"`, `attach:"ATT"`, `pairTimeout:200`, scripted calls across several loops.
+
+How it runs: calls bucket **by loop**. When `L-1` has 2 calls (MRU2, MRU4), AGV-01 runs the trip
+`HOME-1 → ATT(load 2 empties) → … MRU stops (swap) … → HOME-1(unload)`. If `L-2` also has 2 calls,
+AGV-01 runs that as a **separate** trip afterward — loops never merge. The `L-3` calls for STU5 + STU6
+resolve to the **same** stop node `P-SS3`, so the AGV stops **once** there and delivers **both**
+trolleys in one dwell. If AGV-02 is toggled down, its `L-3`/`L-4` calls **stall** until it's back —
+AGV-01 is never reassigned them.
 
 ---
 
@@ -371,10 +436,13 @@ single-trolley trip.
    `home → group.stops → home` with its own home slot; `agv`-pinned requests are head-of-line
    blocking. `action` stops latch the towed-trolley load; dwell = `dwell` or `serviceTime` (0 for
    `move`).
-4. **Loop mode**: calls = `(machine, type)`; each machine's `agv` is its **zone**; per zone the engine
-   **pairs 2 calls** (or sends a single after `pairTimeout`), ordered by **ring position**, train
-   loaded rear=first/front=second, routed `store → stops → store → home`. An AGV toggled "down"
-   funnels its zone to a live AGV.
+4. **Loop mode**: calls = `(machine, type)`; the engine **pairs 2 calls** (or sends a single after
+   `pairTimeout`), train loaded rear=first/front=second.
+   - *Loops model* (`LOOPS`): pairing buckets **per loop**; each trip is one loop,
+     `home → attach(load) → route(swaps) → home(unload)`; two machines sharing a `stop` are served in
+     one dwell; a down AGV's loops **stall**.
+   - *Zone model* (`store`): pairing buckets **per AGV/zone**, ordered by **ring position**, routed
+     `store(load) → stops → store(unload) → home`; a down AGV funnels its zone to a live AGV.
 5. **Determinism**: motion + the seeded RNG mean that, with a scripted `requests` timeline and
    `autoGenerate.enabled=false`, a recording is byte-for-byte reproducible.
 6. **Timing**: travel time per leg = `distance / agvSpeed`; add `serviceTime` (or explicit `dwell`)

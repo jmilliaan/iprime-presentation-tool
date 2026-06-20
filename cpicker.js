@@ -29,6 +29,8 @@ const state = {
   agvs:     [{ id: 'AGV-01', color: AGV_COLORS[0] }],
   groups:   {},                           // id -> {name, stops:[{station,action,dwell?}], homeStart, homeEnd}
   activeGroup:  null,
+  loops:    {},                           // id -> {name, agv, route:[nodeId]} — loop-mode allocation
+  activeLoop:   null,
   calls:    [],                           // [{x,y,group}] — free-floating call buttons
   sim: { agvSpeed: 120, serviceTime: 3, requests: [],
          autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } },
@@ -49,6 +51,7 @@ const state = {
   groupEditMode: 'add',
   // counters
   groupN: 0,
+  loopN: 0,
 };
 
 // ── Element refs ─────────────────────────────────────────────────────────────
@@ -58,6 +61,8 @@ const modeBadge   = $('modeBadge');
 const pathBar     = $('pathBar'),    stationBar = $('stationBar');
 const groupBar    = $('groupBar'),   callBar    = $('callBar');
 const groupsPanel = $('groupsPanel'), groupsBody = $('groupsBody');
+const loopsPanel  = $('loopsPanel'),  loopsBody  = $('loopsBody');
+const loopsBar    = $('loopsBar');
 const simBody     = $('simBody');
 const actionPicker = $('actionPicker'), groupPicker = $('groupPicker'), groupPickerBody = $('groupPickerBody');
 const hudCoords = $('hudCoords'), hudZoom = $('hudZoom'), hudCounts = $('hudCounts'), hudFile = $('hudFile');
@@ -125,6 +130,7 @@ $('confirmClearOk').addEventListener('click', () => {
   confirmClearModal.close();
   state.path = { nodes: {}, edges: [] };
   state.stations = {}; state.calls = []; state.groups = {}; state.activeGroup = null;
+  state.loops = {}; state.activeLoop = null;
   state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
   state.sim = { agvSpeed: 120, serviceTime: 3, requests: [],
                 autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
@@ -148,9 +154,12 @@ function loadIntoState(data) {
   };
   state.stations = {};
   for (const [id, s] of Object.entries(data.STATIONS || {})) {
-    const role = ['home', 'tbm', 'store', 'action'].includes(s.role) ? s.role : 'action';
+    const role = ['home', 'tbm', 'store', 'attach', 'action'].includes(s.role) ? s.role : 'action';
     state.stations[id] = { x: s.x, y: s.y, role };
-    if (role === 'tbm') state.stations[id].agv = s.agv || null;
+    if (role === 'tbm') {
+      state.stations[id].agv = s.agv || null;
+      if (s.stop) state.stations[id].stop = s.stop;   // loops mode: serviced-at node
+    }
   }
   state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
   if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
@@ -164,6 +173,12 @@ function loadIntoState(data) {
         if (st.dwell !== undefined) o.dwell = st.dwell;
         return o;
       }) };
+  state.loops = {};
+  for (const [id, l] of Object.entries(data.LOOPS || {})) {
+    if (!l) continue;
+    state.loops[id] = { name: l.name || id, agv: l.agv || (state.agvs[0] && state.agvs[0].id), route: (l.route || []).slice() };
+  }
+  state.activeLoop = Object.keys(state.loops)[0] || null;
   state.calls = (data.CALLS || []).filter(c => c && typeof c.x === 'number').map(c => ({ x: c.x, y: c.y, group: c.group }));
   (data.CALL_STATIONS || []).forEach(c => {   // legacy: anchor to the station's position
     const s = (data.STATIONS || {})[c.station];
@@ -189,6 +204,7 @@ function syncCounters() {
   state.stationN = Math.max(0, ...stIds.filter(i => i.startsWith('ST-')).map(i => num(i, 'ST-'))) + 1;
   state.homeN    = Math.max(0, ...stIds.filter(i => i.startsWith('HS-')).map(i => num(i, 'HS-'))) + 1;
   state.groupN   = Object.keys(state.groups).length;
+  state.loopN    = Object.keys(state.loops).length;
 }
 
 // ── Coordinate transforms / hit tests ──────────────────────────────────────────
@@ -268,14 +284,17 @@ function setMode(m) {
   state.pathSel = null;
   hideActionPicker(); hideGroupPicker();
   modeBadge.textContent = m + ' MODE';
-  modeBadge.className = { PATH: 'track-mode', STATION: 'node-mode', GROUP: 'seq-mode', CALL: 'node-mode' }[m] || 'node-mode';
+  modeBadge.className = { PATH: 'track-mode', STATION: 'node-mode', GROUP: 'seq-mode', CALL: 'node-mode', LOOPS: 'seq-mode' }[m] || 'node-mode';
   pathBar.style.display    = m === 'PATH'    ? 'flex'  : 'none';
   stationBar.style.display = m === 'STATION' ? 'flex'  : 'none';
   groupBar.style.display   = m === 'GROUP'   ? 'flex'  : 'none';
   callBar.style.display    = m === 'CALL'    ? 'flex'  : 'none';
+  loopsBar.style.display   = m === 'LOOPS'   ? 'flex'  : 'none';
   groupsPanel.style.display = m === 'GROUP'  ? 'block' : 'none';
+  loopsPanel.style.display  = m === 'LOOPS'  ? 'block' : 'none';
   if (m !== 'GROUP') state.groupEditMode = 'add';
   updateGroupBar();
+  updateLoopsBar(); updateLoopsPanel();
 }
 
 window.addEventListener('keydown', (e) => {
@@ -284,6 +303,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '2') setMode('STATION');
   else if (e.key === '3') setMode('GROUP');
   else if (e.key === '4') setMode('CALL');
+  else if (e.key === '5') setMode('LOOPS');
   else if ((e.key === 'a' || e.key === 'A') && state.mode === 'PATH') { state.pathArc = !state.pathArc; updatePathBar(); }
   else if (e.key === 's' || e.key === 'S') saveJSON();
   else if (e.key === 'Escape') { state.pathSel = null; hideActionPicker(); hideGroupPicker(); }
@@ -324,6 +344,7 @@ canvas.addEventListener('click', (e) => {
   else if (state.mode === 'STATION') onClickStation(sx, sy);
   else if (state.mode === 'GROUP')   onClickGroup(sx, sy);
   else if (state.mode === 'CALL')    onClickCall(sx, sy);
+  else if (state.mode === 'LOOPS')   onClickLoop(sx, sy);
 });
 
 canvas.addEventListener('contextmenu', (e) => {
@@ -332,6 +353,7 @@ canvas.addEventListener('contextmenu', (e) => {
   else if (state.mode === 'STATION') undoStation();
   else if (state.mode === 'GROUP')   undoGroupStop();
   else if (state.mode === 'CALL')    removeCallAt(e.clientX, e.clientY);
+  else if (state.mode === 'LOOPS')   undoLoopStop();
 });
 
 // ── PATH mode ──────────────────────────────────────────────────────────────────
@@ -410,14 +432,16 @@ $('stActionBtn').addEventListener('click', () => { state.placeRole = 'action'; u
 $('stHomeBtn').addEventListener('click', () => { state.placeRole = 'home'; updateStationBar(); });
 $('stMachineBtn') && $('stMachineBtn').addEventListener('click', () => { state.placeRole = 'tbm'; updateStationBar(); });
 $('stStoreBtn')   && $('stStoreBtn').addEventListener('click', () => { state.placeRole = 'store'; updateStationBar(); });
+$('stAttachBtn')  && $('stAttachBtn').addEventListener('click', () => { state.placeRole = 'attach'; updateStationBar(); });
 $('stZoneSelect') && $('stZoneSelect').addEventListener('change', (e) => { state.zoneAgv = e.target.value; });
 
 function updateStationBar() {
   $('stActionBtn').classList.toggle('active', state.placeRole === 'action');
   $('stHomeBtn').classList.toggle('active', state.placeRole === 'home');
-  const mb = $('stMachineBtn'), sb = $('stStoreBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
+  const mb = $('stMachineBtn'), sb = $('stStoreBtn'), ab = $('stAttachBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
   if (mb) mb.classList.toggle('active', state.placeRole === 'tbm');
   if (sb) sb.classList.toggle('active', state.placeRole === 'store');
+  if (ab) ab.classList.toggle('active', state.placeRole === 'attach');
   // Zone (serving AGV) selector — only relevant when placing machines.
   if (zw && zs) {
     zw.style.display = state.placeRole === 'tbm' ? 'flex' : 'none';
@@ -431,7 +455,7 @@ function updateStationBar() {
     });
   }
   const hint = $('stHint');
-  if (hint) hint.textContent = (state.placeRole === 'tbm' || state.placeRole === 'store')
+  if (hint) hint.textContent = (state.placeRole === 'tbm' || state.placeRole === 'store' || state.placeRole === 'attach')
     ? 'Click anywhere on a path line — drops it there (splits the line) · RClick=undo'
     : 'Click=place (auto-links to nearest corner) · RClick=undo';
 }
@@ -439,25 +463,25 @@ function updateStationBar() {
 function onClickStation(sx, sy) {
   const role = state.placeRole;
 
-  // Machines/store sit ON the loop, so they tag an existing path corner (keeping
-  // the id in both PATH.nodes and STATIONS — the loop-ring convention).
-  if (role === 'tbm' || role === 'store') {
+  // Machines / store / attach sit ON the track, so they tag an existing path corner
+  // (keeping the id in both PATH.nodes and STATIONS — the loop-ring convention).
+  if (role === 'tbm' || role === 'store' || role === 'attach') {
     // Reuse an existing corner if the click lands on one; otherwise snap onto the
-    // nearest line, creating a corner there (splitting that edge) so the machine/
-    // store is a real ring node wherever it's dropped.
+    // nearest line, creating a corner there (splitting that edge) so it is a real
+    // route node wherever it's dropped.
     let cid = hitCorner(sx, sy);
     if (!cid) {
       const { ix, iy } = toImg(sx, sy);
       const hit = nearestEdge(ix, iy);
-      if (!hit) { alert('Draw the loop in Path mode first — machines/store snap onto the nearest path line.'); return; }
+      if (!hit) { alert('Draw the track in Path mode first — machines/store/attach snap onto the nearest path line.'); return; }
       cid = nextCornerId();
       splitEdgeAt(hit.edge, hit.x, hit.y, cid);
     }
     const p = state.path.nodes[cid];
-    if (role === 'store') {
+    if (role === 'store' || role === 'attach') {
       for (const id of Object.keys(state.stations))
-        if (state.stations[id].role === 'store') delete state.stations[id];   // single store
-      state.stations[cid] = { x: p.x, y: p.y, role: 'store' };
+        if (state.stations[id].role === role) delete state.stations[id];   // single store / attach
+      state.stations[cid] = { x: p.x, y: p.y, role };
     } else {
       const agv = state.zoneAgv || (state.agvs[0] && state.agvs[0].id) || null;
       state.stations[cid] = { x: p.x, y: p.y, role: 'tbm', agv };
@@ -643,6 +667,100 @@ function updateGroupsPanel() {
   updateGroupBar(); updateHud();
 }
 
+// ── LOOPS mode ───────────────────────────────────────────────────────────────
+// A loop = an owning AGV + an explicit ordered route (path corners + machines).
+// The player wraps it as home → attach(load) → route(swaps) → home(unload).
+
+function nextLoopId() {
+  let i = state.loopN;
+  let id; do { id = 'L-' + (i + 1); i++; } while (state.loops[id]);
+  state.loopN = i;
+  return id;
+}
+function newLoop() {
+  const id = nextLoopId();
+  state.loops[id] = { name: id, agv: (state.agvs[0] && state.agvs[0].id) || null, route: [] };
+  return id;
+}
+function ensureActiveLoop() {
+  if (!state.activeLoop) { state.activeLoop = newLoop(); updateLoopsPanel(); }
+}
+$('newLoopBtn') && $('newLoopBtn').addEventListener('click', () => {
+  state.activeLoop = newLoop();
+  updateLoopsPanel(); updateLoopsBar();
+});
+$('loopAgvSelect') && $('loopAgvSelect').addEventListener('change', (e) => {
+  const lp = state.loops[state.activeLoop];
+  if (lp) { lp.agv = e.target.value; updateLoopsPanel(); }
+});
+
+function onClickLoop(sx, sy) {
+  ensureActiveLoop();
+  const lp = state.loops[state.activeLoop];
+  // A route node is a path corner OR a machine (tbm station).
+  const cid = hitCorner(sx, sy);
+  const sid = hitStation(sx, sy);
+  const node = cid || ((sid && state.stations[sid] && state.stations[sid].role === 'tbm') ? sid : null);
+  if (!node) return;
+  lp.route.push(node);
+  updateLoopsPanel(); updateLoopsBar();
+}
+function undoLoopStop() {
+  const lp = state.loops[state.activeLoop];
+  if (lp && lp.route.length) { lp.route.pop(); updateLoopsPanel(); updateLoopsBar(); }
+}
+function updateLoopsBar() {
+  const sel = $('loopAgvSelect');
+  if (sel) {
+    sel.innerHTML = '';
+    state.agvs.forEach(a => { const o = document.createElement('option'); o.value = a.id; o.textContent = a.id; sel.appendChild(o); });
+    const lp = state.loops[state.activeLoop];
+    if (lp) sel.value = lp.agv || (state.agvs[0] && state.agvs[0].id);
+  }
+  const lbl = $('loopsBarLabel');
+  if (lbl) {
+    const lp = state.loops[state.activeLoop];
+    lbl.textContent = lp ? `Active loop: ${lp.name || state.activeLoop}  (${lp.route.length} nodes)` : 'No active loop — click "+ New loop"';
+  }
+}
+function updateLoopsPanel() {
+  if (!loopsBody) return;
+  loopsBody.innerHTML = '';
+  for (const [id, lp] of Object.entries(state.loops)) {
+    const row = document.createElement('div');
+    row.className = 'agv-entry' + (id === state.activeLoop ? ' active' : '');
+    const info = document.createElement('span');
+    info.style.cssText = 'flex:1;display:flex;flex-direction:column;';
+    const nameEl = document.createElement('span'); nameEl.textContent = lp.name || id;
+    const idEl = document.createElement('span'); idEl.style.cssText = 'color:#888;font-size:10px;';
+    idEl.textContent = `${id} · ${lp.agv || '—'}`;
+    info.appendChild(nameEl); info.appendChild(idEl);
+    row.appendChild(info);
+    const count = document.createElement('span'); count.style.color = '#888'; count.textContent = lp.route.length;
+    row.appendChild(count);
+    const del = document.createElement('span'); del.textContent = ' ✕'; del.style.cssText = 'cursor:pointer;color:#c33;margin-left:6px;';
+    del.addEventListener('click', (ev) => {
+      ev.stopPropagation(); delete state.loops[id];
+      if (state.activeLoop === id) state.activeLoop = Object.keys(state.loops)[0] || null;
+      updateLoopsPanel(); updateLoopsBar();
+    });
+    row.appendChild(del);
+    row.addEventListener('click', () => { state.activeLoop = id; updateLoopsPanel(); updateLoopsBar(); });
+    loopsBody.appendChild(row);
+
+    if (id === state.activeLoop) {
+      lp.route.forEach((n, i) => {
+        const sr = document.createElement('div');
+        sr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;';
+        const isMachine = state.stations[n] && state.stations[n].role === 'tbm';
+        sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${n}</span><span style="color:${isMachine ? '#1f6b50' : '#888'};">${isMachine ? 'machine' : 'corner'}</span>`;
+        loopsBody.appendChild(sr);
+      });
+    }
+  }
+  updateHud();
+}
+
 // ── CALL mode ──────────────────────────────────────────────────────────────────
 
 function onClickCall(sx, sy) {
@@ -762,7 +880,7 @@ function updateHud() {
 }
 function refreshAll() {
   setMode(state.mode);
-  updatePathBar(); updateStationBar(); updateGroupsPanel(); updateSimPanel();
+  updatePathBar(); updateStationBar(); updateGroupsPanel(); updateLoopsPanel(); updateLoopsBar(); updateSimPanel();
   hudFile.textContent = `→ ${state.outputFilename}`;
   updateHud();
 }
@@ -771,13 +889,12 @@ function refreshAll() {
 
 function buildSaveData() {
   const homeSlots = Object.keys(state.stations).filter(id => state.stations[id].role === 'home');
-  // A loop layout (machines on the path + a store) switches the player to the
-  // zoned-pairing engine; otherwise it stays group/FIFO mode.
-  const machines = Object.keys(state.stations).filter(id => state.stations[id].role === 'tbm');
-  const storeId  = Object.keys(state.stations).find(id => state.stations[id].role === 'store') || null;
+  const machines  = Object.keys(state.stations).filter(id => state.stations[id].role === 'tbm');
+  const storeId   = Object.keys(state.stations).find(id => state.stations[id].role === 'store')  || null;
+  const attachId  = Object.keys(state.stations).find(id => state.stations[id].role === 'attach') || null;
+  const hasLoops  = Object.keys(state.loops).length > 0;
   const sim = { ...state.sim };
-  if (machines.length && storeId) { sim.mode = 'loop'; sim.store = storeId; }
-  return {
+  const out = {
     PATH: { nodes: state.path.nodes, edges: state.path.edges },
     STATIONS: state.stations,
     AGVS: state.agvs,
@@ -786,6 +903,16 @@ function buildSaveData() {
     HOME: { slots: homeSlots },
     SIM: sim,
   };
+  // LOOPS present → loops engine (attach + per-AGV home). Else machines + a store
+  // → legacy zone engine. Otherwise plain group/FIFO mode.
+  if (hasLoops) {
+    out.LOOPS = state.loops;
+    sim.mode = 'loop';
+    if (attachId) sim.attach = attachId;
+  } else if (machines.length && storeId) {
+    sim.mode = 'loop'; sim.store = storeId;
+  }
+  return out;
 }
 window.buildSaveData = buildSaveData;
 window.loadIntoState = loadIntoState;
@@ -855,6 +982,22 @@ function drawLoop() {
     });
   }
 
+  // active loop route preview — straight legs through the explicit route nodes
+  if (state.mode === 'LOOPS' && state.activeLoop && state.loops[state.activeLoop]) {
+    const route = state.loops[state.activeLoop].route.filter(n => nodePosC(n));
+    for (let i = 0; i < route.length - 1; i++) {
+      const A = nodePosC(route[i]), B = nodePosC(route[i + 1]);
+      const a = imgToScreen(A.x, A.y, state.view), b = imgToScreen(B.x, B.y, state.view);
+      ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
+      ctx.strokeStyle = 'rgba(42,125,95,0.7)'; ctx.lineWidth = 3; ctx.stroke();
+    }
+    route.forEach((n, i) => {
+      const p = nodePosC(n); const { sx, sy } = imgToScreen(p.x, p.y, state.view);
+      ctx.fillStyle = '#1f6b50'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText(`${i + 1}`, sx, sy - DOT_R - 2);
+    });
+  }
+
   // stations
   for (const [id, st] of Object.entries(state.stations)) {
     const { sx, sy } = imgToScreen(st.x, st.y, state.view);
@@ -862,12 +1005,13 @@ function drawLoop() {
     if (st.role === 'home') {
       ctx.beginPath(); ctx.rect(sx - DOT_R, sy - DOT_R, DOT_R * 2, DOT_R * 2);
       ctx.fillStyle = '#cfe8ff'; ctx.fill(); ctx.strokeStyle = '#2c6fbf'; ctx.lineWidth = 1.5; ctx.stroke();
-    } else if (st.role === 'store') {
+    } else if (st.role === 'store' || st.role === 'attach') {
       const r = DOT_R + 3;
       ctx.beginPath(); ctx.rect(sx - r, sy - r, r * 2, r * 2);
-      ctx.fillStyle = '#34406a'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 7px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText('STORE', sx, sy);
+      ctx.fillStyle = st.role === 'attach' ? '#2a7d5f' : '#34406a'; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 6px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(st.role === 'attach' ? 'ATT' : 'STORE', sx, sy);
     } else if (st.role === 'tbm') {
       const owner = state.agvs.find(a => a.id === st.agv);
       const tint = owner ? owner.color : '#888';
@@ -880,7 +1024,7 @@ function drawLoop() {
       ctx.beginPath(); ctx.arc(sx, sy, DOT_R, 0, Math.PI * 2);
       ctx.fillStyle = '#50DC78'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
     }
-    if (st.role !== 'store') {
+    if (st.role !== 'store' && st.role !== 'attach') {
       const tag = st.role === 'tbm' && st.agv ? `${id} · ${st.agv}` : id;
       ctx.fillStyle = labelTint; ctx.font = '10px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
       ctx.fillText(tag, sx + DOT_R + 3, sy);
