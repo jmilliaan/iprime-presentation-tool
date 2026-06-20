@@ -147,8 +147,9 @@ proposal to confirm.
 Derived at load time:
 - `machineLoop[machineId]` from each `LOOPS[id].route` (a machine appears in exactly one route).
 - `loopAgv[loopId] = LOOPS[id].agv`.
-- The engine wraps each loop trip as `home → attach(load) → route(swaps) → home(unload)` — mirroring
-  how group mode already wraps `home → stops → home`.
+- The engine wraps each loop trip as `home → … route … → home(unload)`, loading at the attach node —
+  mirroring how group mode wraps `home → stops → home`. (See §8: the attach node may sit *in* the route
+  so loading happens in travel order, instead of being beelined first.)
 
 ---
 
@@ -160,8 +161,9 @@ Derived at load time:
    (or single after timeout) **within that loop only**; dispatch a trip for that one loop. Never merge
    loops.
 3. **`_startTrip()`** — stop ordering follows the **loop's authored `route`** (not the global ring);
-   build sequence `home → attach(load) → route swaps → home(unload)`. Drop the `buildLoopRing`
-   dependency for routing (it may still help validation).
+   build sequence `home → … route … → home(unload)`, loading at the attach node (in route order if the
+   route lists it, else beelined first — see §8). Drop the `buildLoopRing` dependency for routing (it may
+   still help validation).
 4. **Nodes** — introduce `attach` handling (load empties + confirm dwell) and make Home the
    unload+park point. Retire single-`store` load/unload, or keep `store` as an alias.
 5. **LEDs / snapshots / degraded mode** — re-express in terms of loops. (Degraded mode is open: if an
@@ -185,6 +187,47 @@ Derived at load time:
 - **Layout Picker authoring of loops** — ✅ shipped. **Loops** mode (`5`): create a loop, pick its AGV,
   click route nodes in order; **Attach** added to the Stations bar. Saving a layout with `LOOPS` sets
   `SIM.mode:"loop"` + `SIM.attach` automatically.
+
+---
+
+## 8. As-built refinements (after the initial implementation)
+
+These post-implementation changes supersede the original design above where they conflict. The
+authoritative, current format/behaviour is in [README.md](README.md) and [JSON_FORMAT.md](JSON_FORMAT.md);
+this section just records the deltas for anyone reading the rationale above.
+
+1. **Store authoring removed.** The legacy `store` (zone model) is still **loaded, run, and rendered**
+   for old files, but the Layout Picker no longer creates one. New layouts are loops-model only. (The
+   zone engine and `buildLoopRing` remain as the fallback path.)
+
+2. **Attach is free-placed, not snapped.** Dropping the **Attach** depot no longer snaps it onto a path
+   line / splits an edge — it lands at the click, free-floating, like a machine (the AGV drives straight
+   to it). One attach per layout (id `ATT`). The old edge-split helpers were removed.
+
+3. **No per-machine zone selector.** The Stations bar's **Zone AGV** dropdown was removed. A machine's
+   serving AGV is **derived from the loop** whose `route` contains it (or its `stop`); machines are saved
+   without an `agv` field. The Picker tints/labels each machine by its loop's AGV (gray until it's added
+   to a loop). The per-machine `tbm.agv` is still read by the **legacy zone engine** only.
+
+4. **Attach can sit *in* the loop route (in-sequence loading).** Originally every trip was
+   `home → attach(load) → route → home` (beeline to attach first). Now the **attach node may be one of
+   the route nodes** (clickable in Loops mode). If the route lists the attach node, the AGV loads when it
+   reaches it in travel order (`home → P-1 → … → ATT(load) → … → home`), so it follows the track instead
+   of beelining. If the route omits attach, the old beeline-first behaviour is the fallback. **Author
+   rule:** place the attach node *before* the machines it loads for.
+
+5. **Empties appear at the attach point, not at home.** The train is **staged** on the load step
+   (`loadTrain`) and the AGV's visible `train` is empty until it performs the `load` action at attach.
+   So no trolley is drawn on the `home → attach` leg.
+
+6. **Parked AGVs are not collision obstacles.** AGVs serving independent loops are fully independent;
+   the geometric collision check now skips `phase === 'parked'` AGVs (previously a robot idling at its
+   home in the shared home/attach area could block the other from departing). Only moving/serving AGVs
+   participate in tailing/merge — matching `detectConflicts`.
+
+7. **Auto-call works in loop mode.** The seeded auto-generator now picks from `machineLoop` (loops
+   model) rather than the zone-only `machineAgv`, so the **Auto-call** toggle generates calls in loops
+   layouts (previously a silent no-op).
 
 ---
 

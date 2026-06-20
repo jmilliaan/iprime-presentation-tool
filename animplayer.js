@@ -164,7 +164,10 @@ function pathClampLimit(w, fromId, toId, dx, dy, len) {
 
   let lim = Infinity;
   for (const o of state.agvs) {
-    if (o === w || o.phase === 'idle' || o.phase === 'done') continue;
+    if (o === w || o.phase === 'idle' || o.phase === 'done' || o.phase === 'parked') continue;
+    // ('parked' = sitting at its home doing nothing → not an obstacle; otherwise an
+    //  idle AGV parked in the shared home/attach area would block the other from
+    //  ever departing, coupling AGVs that serve independent loops.)
     if (homeFree(o)) continue;          // no one waits for an AGV in its home run-in
     const oTarget = o.phase === 'moving' ? o.sequence[o.currentStep]?.node : null;
     const need = requiredGapFor(o);
@@ -215,10 +218,12 @@ function applyActionEffect(seqE, nodePos, w) {
   const action = seqE?.action;
   if (!action || action === 'move') return;
 
-  // Loop-mode train actions. The train is loaded with empties at attach/store; at
-  // each machine the delivered empty is swapped for a full (type untracked); at
-  // the unload point (store / home) the fulls are removed.
-  if (action === 'load')   return;                       // empties already on the train
+  // Loop-mode train actions. The empties become visible only when the AGV reaches
+  // the load point (attach/store) — the train is staged on the load step (`loadTrain`)
+  // and attached here, so no trolley appears while driving home→attach. At each
+  // machine the delivered empty is swapped for a full (type untracked); at the unload
+  // point (store / home) the fulls are removed.
+  if (action === 'load')   { if (seqE.loadTrain) w.train = seqE.loadTrain; return; }
   if (action === 'unload') { w.train = []; return; }
   if (action === 'swap') {
     // Deliver to one slot (zone mode) or several (loops shared stop) in one dwell.

@@ -203,11 +203,14 @@ const LoopDispatch = {
   prepareDisplay() {
     return state.agvs
       .filter(w => w.job && w.phase === 'action_pause' && w.sequence[w.currentStep]?.action === 'load')
-      .map(w => ({
-        agv: w.id,
-        front: (w.train.find(s => s.slot === 'front') || {}).type || null,
-        rear:  (w.train.find(s => s.slot === 'rear')  || {}).type || null,
-      }));
+      .map(w => {
+        const t = w.sequence[w.currentStep]?.loadTrain || w.train;   // staged train shown during the load dwell
+        return {
+          agv: w.id,
+          front: (t.find(s => s.slot === 'front') || {}).type || null,
+          rear:  (t.find(s => s.slot === 'rear')  || {}).type || null,
+        };
+      });
   },
 
   stateLabel(w) {
@@ -378,7 +381,7 @@ const LoopDispatch = {
 
     // Sequence: drive to store (load), follow the ring forward through the stops and
     // all the way back around to the store (unload), then park at the wait spot.
-    const seq = [{ node: L.store, action: 'load', dwell: L.serviceTime, store: true }];
+    const seq = [{ node: L.store, action: 'load', dwell: L.serviceTime, store: true, loadTrain: train }];
     const stopByNode = new Map(stops.map(s => [s.machine, s]));
     const si = L.ringIndex[L.store] ?? 0;
     for (let k = 1; k <= L.ring.length; k++) {
@@ -397,7 +400,7 @@ const LoopDispatch = {
 
     w.job         = 'loop';
     w.tripStops   = stops.map(s => s.machine);
-    w.train       = train;
+    w.train       = [];                            // empty until loaded at the store
     w.sequence    = seq;
     w.currentStep = 0;
     w.actionTimer = 0;
@@ -442,11 +445,13 @@ const LoopDispatch = {
 
     const routeHasAttach = lp.route.includes(L.attach);
     const seq = [];
-    // Legacy: route omits the attach node → load first (beeline home→attach).
-    if (!routeHasAttach) seq.push({ node: L.attach, action: 'load', dwell: L.serviceTime, attach: true });
+    // Empties become visible only when the AGV reaches the attach node — the train is
+    // staged on the load step (`loadTrain`) and attached there, so nothing is towed on
+    // the home→attach leg. Legacy: route omits attach → load first (beeline to attach).
+    if (!routeHasAttach) seq.push({ node: L.attach, action: 'load', dwell: L.serviceTime, attach: true, loadTrain: train });
     for (const node of lp.route) {
       if (node === L.attach) {
-        seq.push({ node, action: 'load', dwell: L.serviceTime, attach: true });   // load in route order
+        seq.push({ node, action: 'load', dwell: L.serviceTime, attach: true, loadTrain: train });   // load in route order
       } else if (deliverAt.has(node)) {
         seq.push({ node, action: 'swap', dwell: L.serviceTime, machine: node, slots: deliverAt.get(node) });
       } else {
@@ -458,7 +463,7 @@ const LoopDispatch = {
     w.job         = 'loop';
     w.loopId      = loopId;
     w.tripStops   = calls.map(c => c.machine);
-    w.train       = train;
+    w.train       = [];                            // empty until loaded at attach
     w.sequence    = seq;
     w.currentStep = 0;
     w.actionTimer = 0;
