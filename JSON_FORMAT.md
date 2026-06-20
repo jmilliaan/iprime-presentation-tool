@@ -210,7 +210,10 @@ not constrain routing.
 ```jsonc
 "LOOPS": {
   "L-1": { "name": "MRU loop", "agv": "AGV-01",
-           "route": ["P-10", "MRU1", "MRU2", "MRU3", "MRU4", "P-11"] }
+           "route": ["P-10", "MRU1", "MRU2", "MRU3", "MRU4", "P-11"],
+           "pair": false },                              // single-immediate
+  "L-2": { "name": "BTU loop", "agv": "AGV-01",
+           "route": [ … ], "pair": true, "pairTimeout": 15 }  // wait for 2, 15 s
 }
 ```
 
@@ -222,10 +225,16 @@ Present **only** in the loops sub-model; its presence selects the loops engine. 
 - `route` — an **explicit ordered list of node ids** (path corners + machines) the AGV drives, from the
   first node *after* attach to the last node *before* returning home. Nodes not in `PATH.nodes`/`STATIONS`
   are dropped. There is **no pathfinding** — straight legs between consecutive route nodes (like a group).
+- `pair` *(default `true`)* — pairing policy. `false` → dispatch **each call immediately** as a
+  single-trolley trip. `true` → **wait for 2 calls** on the loop (then a 2-trolley trip), or send a lone
+  call single after `pairTimeout`.
+- `pairTimeout` *(default `15`, seconds)* — for `pair:true` loops, how long a lone call waits for a
+  partner before going single. Ignored when `pair:false`.
 
 **Machine → loop** is derived: a `tbm` belongs to the loop whose `route` contains it, or contains its
 `stop` node (shared stop). A machine in zero or multiple routes is a layout error. **Pairing buckets by
-loop:** two calls pair only if on the same loop. The engine wraps each trip as
+loop:** two calls pair only if on the same loop — any two on that loop (the AGV visits up to two stop
+positions, or one if they share it). The engine wraps each trip as
 `home → attach(load) → route(swap at each called machine) → home(unload)`.
 
 ### 4.7 `HOME` — parking slot assignment
@@ -328,7 +337,8 @@ The file is passed through a normalizer before use. To read a file the way the a
   defaults.
 - **STATIONS:** clamp `role` to `action|home|tbm|store|attach` (else `action`); keep `agv` and `stop`
   only for `tbm`.
-- **LOOPS:** drop loops whose `agv` isn't an `AGVS` id; filter `route` to existing nodes; drop empty.
+- **LOOPS:** drop loops whose `agv` isn't an `AGVS` id; filter `route` to existing nodes; drop empty;
+  default `pair→true`, `pairTimeout→15`.
 - **AGVS:** fill `id`/`color` defaults.
 - **TROLLEY_TYPES:** default 6-type palette if absent/empty.
 - **GROUPS.stops:** drop stops whose `node` doesn't exist; map `action` to `move|none|empty|full`
@@ -412,18 +422,20 @@ AGV-02 for M6/M8. A lone call with no partner would wait up to `pairTimeout` (20
 
 Given (abridged from `sample_loops.json`, the *103 Tyre Building* plant):
 
-- `STATIONS`: one `attach` (`ATT`), two `home`s (`HOME-1/2`), 38 `tbm` machines. `STU5`/`STU6` carry
-  `stop:"P-SS3"` — a **shared stop**.
-- `LOOPS`: `L-1` (AGV-01, MRU 1-4), `L-2` (AGV-01, BTU 9-24), `L-3` (AGV-02, BTU 1-8 + STU 1-6),
-  `L-4` (AGV-02, STU 7-10). So AGV-01 owns L-1 & L-2; AGV-02 owns L-3 & L-4.
-- `SIM`: `mode:"loop"`, `attach:"ATT"`, `pairTimeout:200`, scripted calls across several loops.
+- `STATIONS`: one `attach` (`ATT`), two `home`s (`HOME-1/2`), 38 `tbm` machines. **Shared stops** via
+  `stop`: `BTU17..BTU24` point at `BTU9..BTU16`; `STU1..STU6` point at `BTU1..BTU6`.
+- `LOOPS`: `L-1` (AGV-01, MRU 1-4, **`pair:false`**), `L-2` (AGV-01, BTU 9-24, **`pair:true`**),
+  `L-3` (AGV-02, BTU 1-8 + STU 1-6, **`pair:true`**), `L-4` (AGV-02, STU 7-10, **`pair:false`**). So
+  AGV-01 owns L-1 & L-2; AGV-02 owns L-3 & L-4.
+- `SIM`: `mode:"loop"`, `attach:"ATT"`, scripted calls across several loops.
 
-How it runs: calls bucket **by loop**. When `L-1` has 2 calls (MRU2, MRU4), AGV-01 runs the trip
-`HOME-1 → ATT(load 2 empties) → … MRU stops (swap) … → HOME-1(unload)`. If `L-2` also has 2 calls,
-AGV-01 runs that as a **separate** trip afterward — loops never merge. The `L-3` calls for STU5 + STU6
-resolve to the **same** stop node `P-SS3`, so the AGV stops **once** there and delivers **both**
-trolleys in one dwell. If AGV-02 is toggled down, its `L-3`/`L-4` calls **stall** until it's back —
-AGV-01 is never reassigned them.
+How it runs: calls bucket **by loop**. `L-1`/`L-4` are `pair:false`, so each call dispatches
+**immediately** as a single-trolley trip `HOME → ATT(load 1) → machine(swap) → HOME(unload)`. `L-2`/`L-3`
+are `pair:true` — the AGV **waits for 2 calls** (15 s timeout → single). A `L-2` pair of `BTU9` + `BTU17`
+resolves to the **same** stop node (`BTU17.stop = BTU9`), so the AGV stops **once** and delivers **both**
+trolleys in one dwell; a pair of `BTU12` + `BTU14` (different positions) makes **two** stops. AGV-01 runs
+its L-1 and L-2 trips **separately** — loops never merge. If AGV-02 is toggled down, its `L-3`/`L-4`
+calls **stall** until it's back.
 
 ---
 
@@ -438,9 +450,10 @@ AGV-01 is never reassigned them.
    `move`).
 4. **Loop mode**: calls = `(machine, type)`; the engine **pairs 2 calls** (or sends a single after
    `pairTimeout`), train loaded rear=first/front=second.
-   - *Loops model* (`LOOPS`): pairing buckets **per loop**; each trip is one loop,
-     `home → attach(load) → route(swaps) → home(unload)`; two machines sharing a `stop` are served in
-     one dwell; a down AGV's loops **stall**.
+   - *Loops model* (`LOOPS`): pairing buckets **per loop** with a per-loop policy — `pair:false` =
+     single-immediate, `pair:true` = wait for 2 (or 1 after `pairTimeout`, default 15 s). Each trip is
+     one loop, `home → attach(load) → route(swaps) → home(unload)`; two machines sharing a `stop` are
+     served in one dwell; a down AGV's loops **stall**.
    - *Zone model* (`store`): pairing buckets **per AGV/zone**, ordered by **ring position**, routed
      `store(load) → stops → store(unload) → home`; a down AGV funnels its zone to a live AGV.
 5. **Determinism**: motion + the seeded RNG mean that, with a scripted `requests` timeline and

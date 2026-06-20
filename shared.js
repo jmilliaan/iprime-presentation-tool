@@ -342,7 +342,13 @@ function normaliseLayout(data) {
     if (!l) continue;
     const route = (l.route || []).filter(n => nodeExists(n));
     if (!route.length || !agvIdSet.has(l.agv)) continue;
-    loops[id] = { name: l.name || id, agv: l.agv, route };
+    loops[id] = {
+      name: l.name || id,
+      agv: l.agv,
+      route,
+      pair: l.pair !== false,                                              // wait for a 2nd call (default true)
+      pairTimeout: typeof l.pairTimeout === 'number' ? l.pairTimeout : 15, // s before a lone call goes single
+    };
   }
 
   // SIM — optional playback config

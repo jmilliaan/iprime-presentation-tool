@@ -331,19 +331,24 @@ const LoopDispatch = {
     }
   },
 
-  // Loops model: bucket pending calls by LOOP (not by AGV). For each idle AGV's
-  // loops, pair 2 calls on that loop (or 1 after timeout) and run one trip. Loops
-  // never merge; a down AGV is skipped entirely so its loops stall.
+  // Loops model: bucket pending calls by LOOP (not by AGV). Per-loop policy:
+  //  • pair:false  → dispatch each call immediately as a single-trolley trip.
+  //  • pair:true   → dispatch 2 calls together, or 1 after the loop's pairTimeout.
+  // Loops never merge; a down AGV is skipped entirely so its loops stall.
   _assignLoops() {
     const L = loopdispatch;
     for (const w of state.agvs) {
       if (w.phase !== 'parked' || L.downAgvs.has(w.id)) continue;
       for (const lid of (L.agvLoops[w.id] || [])) {
+        const lp = L.loops[lid];
         const mine = L.queue.filter(c => L.machineLoop[c.machine] === lid);
         if (mine.length === 0) continue;
+        const pairing = lp.pair !== false;
+        const timeout = typeof lp.pairTimeout === 'number' ? lp.pairTimeout : L.pairTimeout;
         let take;
-        if (mine.length >= 2) take = mine.slice(0, this.trainSizeCap());
-        else if (L.simTime - mine[0].t >= L.pairTimeout) take = [mine[0]];
+        if (!pairing) take = [mine[0]];                                  // single, immediate
+        else if (mine.length >= 2) take = mine.slice(0, this.trainSizeCap());
+        else if (L.simTime - mine[0].t >= timeout) take = [mine[0]];     // lone call timed out → single
         else continue;
         const taken = new Set(take);
         L.queue = L.queue.filter(c => !taken.has(c));

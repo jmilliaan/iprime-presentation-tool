@@ -46,7 +46,7 @@ const state = {
   pathSel: null, pathArc: false, pathR: 120, pathCW: true, pathPtN: 1, edgeN: 1,
   pathHistory: [],   // LIFO of {node?,edge?,prevSel} so right-click undoes a whole placement
   // STATION editing
-  placeRole: 'action', stationN: 1, homeN: 1, machineN: 1,
+  placeRole: 'action', stationN: 1, homeN: 1, machineN: 1, shareHost: null,
   // GROUP editing
   groupEditMode: 'add',
   // counters
@@ -176,7 +176,10 @@ function loadIntoState(data) {
   state.loops = {};
   for (const [id, l] of Object.entries(data.LOOPS || {})) {
     if (!l) continue;
-    state.loops[id] = { name: l.name || id, agv: l.agv || (state.agvs[0] && state.agvs[0].id), route: (l.route || []).slice() };
+    state.loops[id] = {
+      name: l.name || id, agv: l.agv || (state.agvs[0] && state.agvs[0].id), route: (l.route || []).slice(),
+      pair: l.pair !== false, pairTimeout: typeof l.pairTimeout === 'number' ? l.pairTimeout : 15,
+    };
   }
   state.activeLoop = Object.keys(state.loops)[0] || null;
   state.calls = (data.CALLS || []).filter(c => c && typeof c.x === 'number').map(c => ({ x: c.x, y: c.y, group: c.group }));
@@ -435,15 +438,18 @@ $('stHomeBtn').addEventListener('click', () => { state.placeRole = 'home'; updat
 $('stMachineBtn') && $('stMachineBtn').addEventListener('click', () => { state.placeRole = 'tbm'; updateStationBar(); });
 $('stStoreBtn')   && $('stStoreBtn').addEventListener('click', () => { state.placeRole = 'store'; updateStationBar(); });
 $('stAttachBtn')  && $('stAttachBtn').addEventListener('click', () => { state.placeRole = 'attach'; updateStationBar(); });
+$('stShareBtn')   && $('stShareBtn').addEventListener('click', () => { state.placeRole = 'share'; state.shareHost = null; updateStationBar(); });
 $('stZoneSelect') && $('stZoneSelect').addEventListener('change', (e) => { state.zoneAgv = e.target.value; });
 
 function updateStationBar() {
+  if (state.placeRole !== 'share') state.shareHost = null;
   $('stActionBtn').classList.toggle('active', state.placeRole === 'action');
   $('stHomeBtn').classList.toggle('active', state.placeRole === 'home');
-  const mb = $('stMachineBtn'), sb = $('stStoreBtn'), ab = $('stAttachBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
+  const mb = $('stMachineBtn'), sb = $('stStoreBtn'), ab = $('stAttachBtn'), shb = $('stShareBtn'), zw = $('stZoneWrap'), zs = $('stZoneSelect');
   if (mb) mb.classList.toggle('active', state.placeRole === 'tbm');
   if (sb) sb.classList.toggle('active', state.placeRole === 'store');
   if (ab) ab.classList.toggle('active', state.placeRole === 'attach');
+  if (shb) shb.classList.toggle('active', state.placeRole === 'share');
   // Zone (serving AGV) selector — only relevant when placing machines.
   if (zw && zs) {
     zw.style.display = state.placeRole === 'tbm' ? 'flex' : 'none';
@@ -462,6 +468,10 @@ function updateStationBar() {
       hint.textContent = 'Click to drop a machine anywhere (free-floating) · click a corner to put it on the track · RClick=undo';
     else if (state.placeRole === 'store' || state.placeRole === 'attach')
       hint.textContent = 'Click on a path line — snaps onto it (splits the line) · RClick=undo';
+    else if (state.placeRole === 'share')
+      hint.textContent = state.shareHost
+        ? `Sharing → click the machine that joins ${state.shareHost}'s stop`
+        : 'Click the HOST machine (the stop position), then a 2nd machine to share it · click a shared machine to unshare';
     else
       hint.textContent = 'Click=place (auto-links to nearest corner) · RClick=undo';
   }
@@ -469,6 +479,24 @@ function updateStationBar() {
 
 function onClickStation(sx, sy) {
   const role = state.placeRole;
+
+  // Share-stop: link two machines to one stopping position. First click picks the
+  // HOST (the machine that sits on the route); the second machine gets stop=host, so
+  // it's serviced at the host's position (each keeps its own id → own buttons + LED).
+  // Clicking a machine that already shares (has a stop) clears it.
+  if (role === 'share') {
+    const sid = hitStation(sx, sy);
+    if (!sid || state.stations[sid].role !== 'tbm') return;
+    if (!state.shareHost) {
+      if (state.stations[sid].stop) { delete state.stations[sid].stop; }   // unshare
+      else state.shareHost = sid;                                          // pick host
+    } else if (sid !== state.shareHost) {
+      state.stations[sid].stop = state.shareHost;                          // join host's stop
+      state.shareHost = null;
+    }
+    updateStationBar(); updateHud();
+    return;
+  }
 
   // Store / attach are depots on the spine: snap onto the nearest path line (or reuse
   // a clicked corner), splitting the edge so they're a real route node. One each.
@@ -696,7 +724,7 @@ function nextLoopId() {
 }
 function newLoop() {
   const id = nextLoopId();
-  state.loops[id] = { name: id, agv: (state.agvs[0] && state.agvs[0].id) || null, route: [] };
+  state.loops[id] = { name: id, agv: (state.agvs[0] && state.agvs[0].id) || null, route: [], pair: true, pairTimeout: 15 };
   return id;
 }
 function ensureActiveLoop() {
@@ -766,11 +794,31 @@ function updateLoopsPanel() {
     loopsBody.appendChild(row);
 
     if (id === state.activeLoop) {
+      // pairing policy row: pair (wait for 2) + timeout, or single-immediate
+      const pr = document.createElement('div');
+      pr.style.cssText = 'padding:3px 10px 3px 18px;font-size:11px;display:flex;gap:6px;align-items:center;color:#1f6b50;';
+      const pcb = document.createElement('input'); pcb.type = 'checkbox'; pcb.checked = lp.pair !== false;
+      pcb.addEventListener('click', ev => ev.stopPropagation());
+      pcb.addEventListener('change', () => { lp.pair = pcb.checked; updateLoopsPanel(); });
+      const plabel = document.createElement('span'); plabel.style.flex = '1'; plabel.textContent = 'pair (wait for 2)';
+      const tin = document.createElement('input'); tin.type = 'number'; tin.min = '0'; tin.value = lp.pairTimeout ?? 15;
+      tin.title = 'pair timeout (s)';
+      tin.style.cssText = 'width:46px;font-family:monospace;font-size:11px;padding:1px 3px;';
+      tin.disabled = lp.pair === false;
+      tin.addEventListener('click', ev => ev.stopPropagation());
+      tin.addEventListener('keydown', ev => ev.stopPropagation());
+      tin.addEventListener('change', () => { lp.pairTimeout = Math.max(0, parseFloat(tin.value) || 0); });
+      pr.appendChild(pcb); pr.appendChild(plabel); pr.appendChild(tin); pr.appendChild(document.createTextNode('s'));
+      loopsBody.appendChild(pr);
+
       lp.route.forEach((n, i) => {
         const sr = document.createElement('div');
         sr.style.cssText = 'padding:2px 10px 2px 18px;font-size:11px;display:flex;gap:6px;';
-        const isMachine = state.stations[n] && state.stations[n].role === 'tbm';
-        sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${n}</span><span style="color:${isMachine ? '#1f6b50' : '#888'};">${isMachine ? 'machine' : 'corner'}</span>`;
+        const st = state.stations[n];
+        const isMachine = st && st.role === 'tbm';
+        const sharedHere = isMachine ? Object.keys(state.stations).filter(k => state.stations[k].stop === n).length : 0;
+        const tag = isMachine ? (sharedHere ? `machine +${sharedHere} shared` : 'machine') : 'corner';
+        sr.innerHTML = `<span style="color:#888;">${i + 1}.</span><span style="flex:1;">${n}</span><span style="color:${isMachine ? '#1f6b50' : '#888'};">${tag}</span>`;
         loopsBody.appendChild(sr);
       });
     }
@@ -1013,6 +1061,22 @@ function drawLoop() {
       ctx.fillStyle = '#1f6b50'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.fillText(`${i + 1}`, sx, sy - DOT_R - 2);
     });
+  }
+
+  // shared-stop links: dashed connector from a machine to the stop node it shares
+  for (const [id, st] of Object.entries(state.stations)) {
+    if (st.role !== 'tbm' || !st.stop) continue;
+    const host = nodePosC(st.stop);
+    if (!host) continue;
+    const a = imgToScreen(st.x, st.y, state.view), b = imgToScreen(host.x, host.y, state.view);
+    ctx.beginPath(); ctx.moveTo(a.sx, a.sy); ctx.lineTo(b.sx, b.sy);
+    ctx.strokeStyle = 'rgba(230,150,30,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // highlight the pending share host
+  if (state.placeRole === 'share' && state.shareHost && state.stations[state.shareHost]) {
+    const h = state.stations[state.shareHost]; const { sx, sy } = imgToScreen(h.x, h.y, state.view);
+    ctx.beginPath(); ctx.arc(sx, sy, DOT_R + 5, 0, Math.PI * 2);
+    ctx.strokeStyle = '#e8961e'; ctx.lineWidth = 2; ctx.stroke();
   }
 
   // stations
