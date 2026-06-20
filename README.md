@@ -224,7 +224,10 @@ Shared behaviour (both models):
     a lone call goes single after the loop's **`pairTimeout`** (default **15 s**). Any 2 calls on the
     loop may pair — the AGV visits up to 2 stop positions (or one, if they share it).
 - **Attach + home:** empties load at a shared **attach** node (`role:"attach"`, `SIM.attach`); fulls
-  unload at each AGV's own **home** slot. A trip is `home → attach(load) → route(swaps) → home(unload)`.
+  unload at each AGV's own **home** slot. A trip is `home → … route … → home(unload)`, loading at the
+  attach node. **Put the attach node *in* the loop's route** at the position where loading should happen,
+  so the AGV follows the track to it (e.g. `home → 1 → … → 5 → attach → 6 → …`). If a route omits the
+  attach node, the AGV instead **beelines to attach first** (`home → attach → route → home`).
 - **Shared stops:** two machines can be serviced at **one route position** — each stays a separate
   machine (its own **6-button call panel + LED**) but points its `stop` at the shared route node. If both
   call in one trip, both empties are delivered in a **single** stop/dwell.
@@ -238,7 +241,8 @@ Shared behaviour (both models):
    track). Use **Share stop** to link two machines to one stopping position: click the host machine, then
    the machine that joins it (sets its `stop`).
 3. **Loops** mode (`5`) — **+ New loop**, pick its **AGV**, toggle **pair** + set its **timeout**, then
-   click route nodes (corners + host machines) **in travel order**.
+   click route nodes **in travel order**: path corners, host machines, **and the Attach point** where
+   loading should occur. (Don't click homes — start/end home is added automatically.)
 
 Saving a layout that has `LOOPS` sets `SIM.mode:"loop"` and `SIM.attach` automatically. A ready example
 is [`sample_loops.json`](sample_loops.json) — the *103 Tyre Building* plant: 2 AGVs, **4 loops**, 38

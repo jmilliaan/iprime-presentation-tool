@@ -408,7 +408,10 @@ const LoopDispatch = {
   // Loops model: build one loop's trip. Calls grouped by the route node they're
   // serviced at (shared stop = 2 machines at one node, delivered in one dwell);
   // stop-groups ordered by route position; REAR = first stop, FRONT = second.
-  // Sequence: home → attach(load) → route swaps → home(unload).
+  // The trip ends at home (unload). Loading happens at the attach node: if the
+  // route INCLUDES the attach node, the AGV loads when it reaches it in sequence
+  // (so it follows the track home→…→attach→…); otherwise attach is prepended as a
+  // first beeline step (legacy behaviour for routes that don't list it).
   _startTripLoops(w, calls, loopId) {
     const L = loopdispatch;
     const lp = L.loops[loopId];
@@ -437,9 +440,14 @@ const LoopDispatch = {
       deliverAt.set(sn, arr);
     }
 
-    const seq = [{ node: L.attach, action: 'load', dwell: L.serviceTime, attach: true }];
+    const routeHasAttach = lp.route.includes(L.attach);
+    const seq = [];
+    // Legacy: route omits the attach node → load first (beeline home→attach).
+    if (!routeHasAttach) seq.push({ node: L.attach, action: 'load', dwell: L.serviceTime, attach: true });
     for (const node of lp.route) {
-      if (deliverAt.has(node)) {
+      if (node === L.attach) {
+        seq.push({ node, action: 'load', dwell: L.serviceTime, attach: true });   // load in route order
+      } else if (deliverAt.has(node)) {
         seq.push({ node, action: 'swap', dwell: L.serviceTime, machine: node, slots: deliverAt.get(node) });
       } else {
         seq.push({ node, action: 'move' });

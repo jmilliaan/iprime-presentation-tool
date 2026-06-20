@@ -692,10 +692,12 @@ $('loopAgvSelect') && $('loopAgvSelect').addEventListener('change', (e) => {
 function onClickLoop(sx, sy) {
   ensureActiveLoop();
   const lp = state.loops[state.activeLoop];
-  // A route node is a path corner OR a machine (tbm station).
+  // A route node is a path corner, a machine (tbm), or the attach point — click
+  // attach where you want loading to happen along the path (else it's loaded first).
   const cid = hitCorner(sx, sy);
   const sid = hitStation(sx, sy);
-  const node = cid || ((sid && state.stations[sid] && state.stations[sid].role === 'tbm') ? sid : null);
+  const okStation = sid && state.stations[sid] && (state.stations[sid].role === 'tbm' || state.stations[sid].role === 'attach');
+  const node = cid || (okStation ? sid : null);
   if (!node) return;
   lp.route.push(node);
   updateLoopsPanel(); updateLoopsBar();

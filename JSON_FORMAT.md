@@ -222,9 +222,10 @@ Present **only** in the loops sub-model; its presence selects the loops engine. 
 - `name` — a human label.
 - `agv` — the **owning AGV** (must be an `AGVS` id, else the loop is dropped). An AGV may own several
   loops; it runs **one loop per trip** and never merges loops.
-- `route` — an **explicit ordered list of node ids** (path corners + machines) the AGV drives, from the
-  first node *after* attach to the last node *before* returning home. Nodes not in `PATH.nodes`/`STATIONS`
-  are dropped. There is **no pathfinding** — straight legs between consecutive route nodes (like a group).
+- `route` — an **explicit ordered list of node ids** the AGV drives: path corners, machines, and
+  **optionally the `attach` node** (place it where loading should happen along the path). Nodes not in
+  `PATH.nodes`/`STATIONS` are dropped. There is **no pathfinding** — straight legs between consecutive
+  route nodes (like a group). Home is *not* in the route (added automatically at start/end).
 - `pair` *(default `true`)* — pairing policy. `false` → dispatch **each call immediately** as a
   single-trolley trip. `true` → **wait for 2 calls** on the loop (then a 2-trolley trip), or send a lone
   call single after `pairTimeout`.
@@ -234,8 +235,10 @@ Present **only** in the loops sub-model; its presence selects the loops engine. 
 **Machine → loop** is derived: a `tbm` belongs to the loop whose `route` contains it, or contains its
 `stop` node (shared stop). A machine in zero or multiple routes is a layout error. **Pairing buckets by
 loop:** two calls pair only if on the same loop — any two on that loop (the AGV visits up to two stop
-positions, or one if they share it). The engine wraps each trip as
-`home → attach(load) → route(swap at each called machine) → home(unload)`.
+positions, or one if they share it). Each trip is `home → … route … → home(unload)`, loading at the
+**attach** node: if the `route` lists the attach node, the AGV loads when it reaches it in sequence (so
+it follows the track, e.g. `home → P-1 → … → attach → … → home`); if the route omits it, the engine
+beelines to attach first (`home → attach → route → home`).
 
 ### 4.7 `HOME` — parking slot assignment
 
@@ -454,8 +457,9 @@ calls **stall** until it's back.
    `pairTimeout`), train loaded rear=first/front=second.
    - *Loops model* (`LOOPS`): pairing buckets **per loop** with a per-loop policy — `pair:false` =
      single-immediate, `pair:true` = wait for 2 (or 1 after `pairTimeout`, default 15 s). Each trip is
-     one loop, `home → attach(load) → route(swaps) → home(unload)`; two machines sharing a `stop` are
-     served in one dwell; a down AGV's loops **stall**.
+     one loop, `home → … route … → home(unload)`, loading at the `attach` node (in route order if the
+     route lists it, else beelined first); two machines sharing a `stop` are served in one dwell; a down
+     AGV's loops **stall**.
    - *Zone model* (`store`): pairing buckets **per AGV/zone**, ordered by **ring position**, routed
      `store(load) → stops → store(unload) → home`; a down AGV funnels its zone to a live AGV.
 5. **Determinism**: motion + the seeded RNG mean that, with a scripted `requests` timeline and
