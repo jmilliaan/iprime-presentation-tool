@@ -135,12 +135,15 @@ Notes:
 ### 4.3 `AGVS` — the robots
 
 ```jsonc
-"AGVS": [ { "id": "AGV-01", "color": "#E63946" }, … ]
+"AGVS": [ { "id": "AGV-01", "color": "#E63946", "heading": 0 }, … ]
 ```
 
-Identity + render colour only. The number of AGVs should equal the number of `HOME.slots`
-(**AGV index *i* parks at `HOME.slots[i]`**). Defaults: `id` → `AGV-0{i+1}`, `color` → a rotating
-palette (`#E63946, #4080e0, #1a9c50, #cc44aa`).
+Identity, render colour, and an optional initial heading. The number of AGVs should equal the number of
+`HOME.slots` (**AGV index *i* parks at `HOME.slots[i]`**). Defaults: `id` → `AGV-0{i+1}`, `color` → a
+rotating palette (`#E63946, #4080e0, #1a9c50, #cc44aa`). `heading` is the AGV's **initial (parked)
+facing** — one of `0 / 90 / 180 / 270` (degrees, y-down; default `0`), clamped to those four. It governs
+only the earliest/parked state; once the AGV moves it auto-faces its travel direction. The AGV body is
+rendered as an elongated **tag** (1.5× long along heading × the lateral width) with a chamfered nose.
 
 ### 4.4 `TROLLEY_TYPES` — loop mode only (optional)
 
@@ -262,10 +265,16 @@ Shared fields:
 "SIM": {
   "agvSpeed": 120,        // px/s            (default 120)
   "serviceTime": 3,       // s dwell at action/swap/load/unload stops (default 3)
+  "trolleyMode": "tow",   // "tow" (trolley behind, default) | "lurk" (trolley on the AGV)
   "requests": [ … ],      // scripted timeline (see below)
   "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
 }
 ```
+
+- `trolleyMode` — how a carried trolley is drawn (whole layout, one mode). **`tow`** (default) trails the
+  trolley behind the AGV on a hitch; **`lurk`** places it **on top of** the AGV at the AGV's rotation.
+  Applies to the **group system's single trolley**; loop-mode 2-trolley trains always tow. In `lurk` the
+  trolley adds no trailing length, so following AGVs keep only the bare-AGV gap.
 
 - `requests` is a **time-ordered script** of work. Its element shape **depends on mode**:
   - **Group mode:** `{ "t": <sec>, "group": "G-A", "agv": "AGV-01"? }` — at time `t`, enqueue group

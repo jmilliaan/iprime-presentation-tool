@@ -44,7 +44,11 @@ AGV-width apart** — two paths that actually overlap on screen along the same l
 exception, an AGV in the **last few nodes of its run home** (the cramped, shared run-in to its private
 home slot) suppresses collision entirely — it neither waits nor is waited for, so the home corridor
 doesn't pile up. (Two AGVs sent **head-on down a single edge** is still unsupported.)
-The towed **trolley** is drawn by load — `none` (no trolley), `empty` (hollow), `full` (solid + cargo box).
+The AGV is drawn as an elongated **tag** (1.5× long, a chamfered "nose" in the heading direction); its
+`AGVS[].heading` sets the **initial parked facing** (`0/90/180/270`), and it auto-faces travel once moving.
+The **trolley** is drawn by load — `none` (no trolley), `empty` (hollow), `full` (solid + cargo box) — and
+its placement follows `SIM.trolleyMode`: **`tow`** (default) trails it behind the AGV on a hitch;
+**`lurk`** sets it **on top of** the AGV at the same rotation (one mode per layout; group system).
 
 ---
 
@@ -94,8 +98,9 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
   pops the last node. **Double-click a group's name** in the panel to rename it (the friendly label only;
   its ID stays the same so call points keep working).
 - **Call:** click anywhere → choose a group to drop a call button; right-click a call marker removes it.
-- **Fleet & Sim panel:** number of AGVs, service time, AGV speed, auto-generate (interval + seed), and a
-  requests timeline (`t  GROUP  [AGV]`, one per line) for repeatable recordings.
+- **Fleet & Sim panel:** number of AGVs, a per-AGV **initial heading** (0/90/180/270), service time, AGV
+  speed, the **Trolley** mode (`tow` / `lurk`), auto-generate (interval + seed), and a requests timeline
+  (`t  GROUP  [AGV]`, one per line) for repeatable recordings.
 
 ---
 
@@ -165,9 +170,10 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 | `STATIONS[].role` | `action` (group-mode load-setting stop), `home` (parking / unload slot), `tbm` (loop-mode machine; carries `agv` = its zone, and optional `stop` = the route node it's serviced at), `store` (legacy single load/unload), or `attach` (loops-mode shared load point). Position only — no path link. Unknown roles fall back to `action`. |
 | `GROUPS[].stops[]` | Explicit ordered nodes: `{ node, action }` (+ optional `dwell`, `label`, and `mode:"manual"` to draw a person at the stop). `action` ∈ `move \| none \| empty \| full` (sets the towed-trolley load; `move` = pass-through). `node` is a path corner or a station; home is excluded. |
 | `GROUPS[].homeStart / homeEnd` | Optional action at the assigned AGV's own home (before leaving / on return): `none \| attach-empty \| attach-full \| detach-empty \| detach-full`. |
+| `AGVS[]` | `{ id, color, heading }`. `heading` (one of `0 / 90 / 180 / 270`, default `0`) is the AGV's **initial parked facing**; once moving it auto-faces travel. |
 | `CALLS[]` | `{ x, y, group }` → a free-floating on-canvas call button. |
 | `HOME.slots[]` | Home-station ids, one slot per AGV (**#AGVs = #home slots**; AGV *i* parks at slot *i*). |
-| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`. Loop mode adds `mode:"loop"`, `trainSize` (trolleys per train, default 2), `pairTimeout` (seconds a lone call waits before a single trip, default 200), and either `attach` (loops model — shared load node) or `store` (legacy zone model). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
+| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`, and `trolleyMode` (`tow` default, or `lurk` — see below). Loop mode adds `mode:"loop"`, `trainSize` (trolleys per train, default 2), `pairTimeout` (seconds a lone call waits before a single trip, default 200), and either `attach` (loops model — shared load node) or `store` (legacy zone model). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
 | `LOOPS` | Loops model only: `id → { name, agv, route:[nodeId…], pair, pairTimeout }` — an owning AGV, an explicit ordered route (corners + machines), and pairing policy (`pair` default `true`; `pairTimeout` seconds, default `15`). Its presence selects the loops engine over the legacy zone engine. |
 
 > Legacy files using `CALL_STATIONS` and `pickup/release/exchange` still load (converted automatically).
