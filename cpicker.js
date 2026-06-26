@@ -32,7 +32,7 @@ const state = {
   loops:    {},                           // id -> {name, agv, route:[nodeId]} — loop-mode allocation
   activeLoop:   null,
   calls:    [],                           // [{x,y,group}] — free-floating call buttons
-  sim: { agvSpeed: 120, serviceTime: 3, requests: [],
+  sim: { agvSpeed: 120, serviceTime: 3, trolleyMode: 'tow', requests: [],
          autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } },
 
   mode: 'PATH',                           // PATH | STATION | GROUP | CALL
@@ -132,8 +132,8 @@ $('confirmClearOk').addEventListener('click', () => {
   state.path = { nodes: {}, edges: [] };
   state.stations = {}; state.calls = []; state.groups = {}; state.activeGroup = null;
   state.loops = {}; state.activeLoop = null;
-  state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
-  state.sim = { agvSpeed: 120, serviceTime: 3, requests: [],
+  state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0], heading: 0 }];
+  state.sim = { agvSpeed: 120, serviceTime: 3, trolleyMode: 'tow', requests: [],
                 autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
   state.pathSel = null; state.pathHistory = []; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.machineN = 1; state.groupN = 0;
@@ -163,8 +163,8 @@ function loadIntoState(data) {
       if (s.stop) state.stations[id].stop = s.stop;   // loops mode: serviced-at node
     }
   }
-  state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length] }));
-  if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0] }];
+  state.agvs = (data.AGVS || []).map((a, i) => ({ id: a.id || `AGV-0${i + 1}`, color: a.color || AGV_COLORS[i % AGV_COLORS.length], heading: [0, 90, 180, 270].includes(a.heading) ? a.heading : 0 }));
+  if (state.agvs.length === 0) state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0], heading: 0 }];
   const mapAct = a => (['move', 'none', 'empty', 'full'].includes(a) ? a : 'move');
   const mapHome = a => HOME_ACTIONS.includes(a) ? a : 'none';
   state.groups = {};
@@ -193,6 +193,7 @@ function loadIntoState(data) {
   const ag = sim.autoGenerate || {};
   state.sim = {
     agvSpeed: sim.agvSpeed || 120, serviceTime: sim.serviceTime ?? 3,
+    trolleyMode: sim.trolleyMode === 'lurk' ? 'lurk' : 'tow',
     requests: (sim.requests || []).map(r => ({ t: +r.t || 0, group: r.group, agv: r.agv || null })),
     autoGenerate: { enabled: !!ag.enabled, meanInterval: ag.meanInterval || 6, seed: ag.seed ?? 1234 },
   };
@@ -934,11 +935,30 @@ function updateSimPanel() {
 
   row('AGVs', numInput(state.agvs.length, v => {
     const n = Math.max(1, Math.min(8, parseInt(v, 10) || 1));
-    const arr = []; for (let i = 0; i < n; i++) arr.push(state.agvs[i] || { id: `AGV-0${i + 1}`, color: AGV_COLORS[i % AGV_COLORS.length] });
-    state.agvs = arr; updateHud();
+    const arr = []; for (let i = 0; i < n; i++) arr.push(state.agvs[i] || { id: `AGV-0${i + 1}`, color: AGV_COLORS[i % AGV_COLORS.length], heading: 0 });
+    state.agvs = arr; updateSimPanel(); updateHud();
   }));
+  // per-AGV initial (parked) heading
+  state.agvs.forEach((a, i) => {
+    const sel = document.createElement('select');
+    sel.style.cssText = 'font-family:monospace;font-size:12px;padding:2px 4px;';
+    [0, 90, 180, 270].forEach(h => { const o = document.createElement('option'); o.value = h; o.textContent = h + '°'; if ((a.heading || 0) === h) o.selected = true; sel.appendChild(o); });
+    sel.addEventListener('change', () => { a.heading = parseInt(sel.value, 10) || 0; });
+    const r = row(`  ${a.id} hdg`, sel);
+    r.querySelector('.dispatch-name').style.color = a.color;
+  });
   row('Service (s)', numInput(state.sim.serviceTime, v => { state.sim.serviceTime = Math.max(0, parseFloat(v) || 0); }));
   row('AGV px/s', numInput(state.sim.agvSpeed, v => { state.sim.agvSpeed = Math.max(1, parseFloat(v) || 120); }));
+  row('Trolley', (() => {
+    const sel = document.createElement('select');
+    sel.style.cssText = 'font-family:monospace;font-size:12px;padding:2px 4px;';
+    [['tow', 'tow (behind)'], ['lurk', 'lurk (on AGV)']].forEach(([v, t]) => {
+      const o = document.createElement('option'); o.value = v; o.textContent = t;
+      if ((state.sim.trolleyMode || 'tow') === v) o.selected = true; sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => { state.sim.trolleyMode = sel.value === 'lurk' ? 'lurk' : 'tow'; });
+    return sel;
+  })());
 
   const agRow = document.createElement('label'); agRow.className = 'dispatch-enable';
   const agc = document.createElement('input'); agc.type = 'checkbox'; agc.checked = state.sim.autoGenerate.enabled;

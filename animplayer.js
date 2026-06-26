@@ -6,7 +6,8 @@ const ctx    = canvas.getContext('2d');
 const BAR_TOP    = 44;
 const BAR_BOTTOM = 48;
 
-const AGV_SIZE    = 30;
+const AGV_SIZE    = 30;          // AGV width (lateral / across heading)
+const AGV_LEN     = Math.round(AGV_SIZE * 1.5);   // AGV length along heading (45)
 const TROLLEY_LEN = 56;   // along the heading (~2× the old length)
 const TROLLEY_WID = 22;   // across
 const CALL_BTN_RADIUS = 13;
@@ -31,6 +32,8 @@ const state = {
   nodes:   {},
   agvs:    [],
   trolleyTypes: [],
+  trolleyMode:  'tow',   // 'tow' (trolley behind) | 'lurk' (trolley on the AGV) — group system
+
   track:   { points: {}, segments: [] },
   view:    { offsetX: 0, offsetY: 0, zoom: 1 },
   bgImage: null,
@@ -60,10 +63,11 @@ function makeWalker(agvDef) {
   return {
     id:           agvDef.id    || 'AGV-01',
     color:        agvDef.color || AGV_COLORS[0],
+    startHeading: [0, 90, 180, 270].includes(agvDef.heading) ? agvDef.heading : 0,  // initial parked facing
     sequence:     agvDef.sequence || [],
     currentStep:  0,
     agvPos:       { x: 0, y: 0 },
-    agvHeading:   0,
+    agvHeading:   [0, 90, 180, 270].includes(agvDef.heading) ? agvDef.heading : 0,
     load:         'none',   // 'none' | 'empty' | 'full' — towed-trolley state (group mode)
     train:        [],       // loop mode: [{slot:'front'|'rear', type, state:'empty'|'full'}]
     tripStops:    [],       // loop mode: machine ids on the current trip
@@ -95,12 +99,12 @@ function nodePos(id) { return state.track.points[id] || state.nodes[id] || null;
 const TROLLEY_PITCH = TROLLEY_LEN + 6;   // centre-to-centre spacing of trolleys in a train
 
 function requiredGapFor(leader) {
-  const half = AGV_SIZE / 2;
+  const half = AGV_LEN / 2;          // half-length along travel
   let rear = half;
   if (leader.train && leader.train.length) {
     rear = half + 8 + leader.train.length * TROLLEY_PITCH - 6;   // clear the whole train
-  } else if (leader.load !== 'none') {
-    rear = half + 8 + TROLLEY_LEN;
+  } else if (leader.load !== 'none' && state.trolleyMode !== 'lurk') {
+    rear = half + 8 + TROLLEY_LEN;    // towed trolley trails behind; lurking rides on the AGV (no extra length)
   }
   return rear + half + FOLLOW_MARGIN;
 }
@@ -128,7 +132,7 @@ function homeFree(w) {
 
 // The largest following gap we ever need (a leader towing a trolley). Used to
 // decide how far up our own route to look for AGVs in front.
-const MAX_GAP = 8 + 2 * (TROLLEY_LEN + 6) + AGV_SIZE + FOLLOW_MARGIN;   // covers a 2-trolley train
+const MAX_GAP = 8 + 2 * (TROLLEY_LEN + 6) + AGV_LEN + FOLLOW_MARGIN;   // covers a 2-trolley train
 
 // Geometric collision clamp. `w` is driving the edge fromId→toId. Returns how far
 // it may advance this frame. We build the polyline `w` will actually drive (its
@@ -251,7 +255,7 @@ function resetWalker(w) {
 
   w.currentStep    = 0;
   w.agvPos         = { x: startPt.x, y: startPt.y };
-  w.agvHeading     = w.sequence[0]?.heading ?? 0;
+  w.agvHeading     = w.sequence[0]?.heading ?? w.startHeading ?? 0;
   w.load           = 'none';
   w.phase          = 'action_pause';
   w.actionTimer    = 0;
@@ -412,6 +416,7 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
       // Pick the engine for this layout (group/FIFO vs loop/zoned-pairing).
       engineMode   = layout.sim.mode === 'loop' ? 'loop' : 'group';
       activeEngine = engineMode === 'loop' ? LoopDispatch : Dispatch;
+      state.trolleyMode = layout.sim.trolleyMode === 'lurk' ? 'lurk' : 'tow';
       activeEngine.init(layout);
 
       const summary = engineMode === 'loop'
@@ -986,16 +991,32 @@ function drawTrolley(sx, sy, heading, load, typeColor) {
   ctx.restore();
 }
 
+// AGV body: an elongated "tag" — AGV_LEN along heading × AGV_SIZE across, with the
+// two front (heading-direction) corners chamfered into a nose. Rotated by heading.
 function drawAGV(sx, sy, heading, color = '#E63946') {
-  const half = AGV_SIZE / 2;
-  drawRoundRect(sx - half, sy - half, AGV_SIZE, AGV_SIZE, 4, color, '#ffffff');
+  const L = AGV_LEN, W = AGV_SIZE;
+  const c = Math.min(W * 0.45, L * 0.5);   // front chamfer depth
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(heading * Math.PI / 180);
+  ctx.beginPath();
+  ctx.moveTo(-L / 2, -W / 2);
+  ctx.lineTo(L / 2 - c, -W / 2);
+  ctx.lineTo(L / 2, -W / 2 + c);
+  ctx.lineTo(L / 2,  W / 2 - c);
+  ctx.lineTo(L / 2 - c,  W / 2);
+  ctx.lineTo(-L / 2,  W / 2);
+  ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.restore();
   drawHeadingArrow(ctx, sx, sy, heading, 16, '#ffffff', 2);
 }
 
 // Loop mode: draw the 2-trolley train (AGV → FRONT → REAR) chained behind the AGV.
 function drawTrain(ax, ay, heading, train, color) {
   const rad  = heading * Math.PI / 180;
-  const step = AGV_SIZE / 2 + 8 + TROLLEY_LEN / 2;   // first trolley centre offset
+  const step = AGV_LEN / 2 + 8 + TROLLEY_LEN / 2;   // first trolley centre offset
   const ordered = [...train].sort((a, b) => (a.slot === 'front' ? 0 : 1) - (b.slot === 'front' ? 0 : 1));
   let px = ax, py = ay;
   ordered.forEach((slot, i) => {
@@ -1231,10 +1252,13 @@ function drawScene(timestamp) {
     const { sx: ax, sy: ay } = imgToScreen(agv.agvPos.x, agv.agvPos.y, state.view);
     const rad = agv.agvHeading * Math.PI / 180;
 
+    const lurking = state.trolleyMode === 'lurk' && (!agv.train || !agv.train.length);
+
     if (agv.train && agv.train.length) {
       drawTrain(ax, ay, agv.agvHeading, agv.train, agv.color);
-    } else if (agv.load !== 'none') {
-      const HITCH = AGV_SIZE / 2 + 8 + TROLLEY_LEN / 2;   // clear the bigger trolley
+    } else if (agv.load !== 'none' && !lurking) {
+      // tow: the trolley trails behind the AGV on a hitch
+      const HITCH = AGV_LEN / 2 + 8 + TROLLEY_LEN / 2;   // clear the bigger trolley
       const tx = ax - HITCH * Math.cos(rad);
       const ty = ay - HITCH * Math.sin(rad);
 
@@ -1257,20 +1281,25 @@ function drawScene(timestamp) {
 
     drawAGV(ax, ay, agv.agvHeading, agv.color);
 
+    // lurk: the trolley rides on top of the AGV (same rotation), drawn over the body
+    if (lurking && agv.load !== 'none') {
+      drawTrolley(ax, ay, agv.agvHeading, agv.load);
+    }
+
     // ID label above AGV when multiple AGVs are present
     if (state.agvs.length > 1) {
       ctx.fillStyle    = agv.color;
       ctx.font         = 'bold 9px monospace';
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'bottom';
-      ctx.fillText(agv.id, ax, ay - AGV_SIZE / 2 - 2);
+      ctx.fillText(agv.id, ax, ay - AGV_LEN / 2 - 2);
     }
 
     // Conflict ring (blinking red)
     if (conflicts.has(idx)) {
       const blink = 0.4 + 0.6 * Math.abs(Math.sin(state.elapsed * 4));
       ctx.beginPath();
-      ctx.arc(ax, ay, AGV_SIZE / 2 + 16, 0, Math.PI * 2);
+      ctx.arc(ax, ay, AGV_LEN / 2 + 16, 0, Math.PI * 2);
       ctx.strokeStyle = `rgba(220,30,30,${blink.toFixed(2)})`;
       ctx.lineWidth   = 2.5;
       ctx.stroke();

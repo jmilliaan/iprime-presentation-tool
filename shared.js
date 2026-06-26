@@ -277,10 +277,11 @@ function normaliseLayout(data) {
     }
   }
 
-  // AGVS — identities only (#AGVs should equal #home stations)
+  // AGVS — identities + optional initial (parked) heading (#AGVs should equal #home stations)
   const agvs = (data.AGVS || []).map((a, i) => ({
     id:    a.id    || `AGV-0${i + 1}`,
     color: a.color || AGV_COLORS[i % AGV_COLORS.length],
+    heading: [0, 90, 180, 270].includes(a.heading) ? a.heading : 0,
   }));
 
   // TROLLEY_TYPES — loop mode; default 6-type palette when omitted
@@ -373,6 +374,7 @@ function normaliseLayout(data) {
 
   const sim = {
     mode,
+    trolleyMode: rawSim.trolleyMode === 'lurk' ? 'lurk' : 'tow',   // group system: trolley behind (tow) vs on the AGV (lurk)
     trainSize:   typeof rawSim.trainSize === 'number' ? rawSim.trainSize : 2,
     pairTimeout: typeof rawSim.pairTimeout === 'number' ? rawSim.pairTimeout : 200,
     store:       (rawSim.store && stations[rawSim.store] && stations[rawSim.store].role === 'store')

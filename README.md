@@ -142,7 +142,7 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
     "HS-1": { "x": 175, "y": 180, "role": "home" },
     "LA":   { "x": 848, "y": 180, "role": "action" }
   },
-  "AGVS": [ { "id": "AGV-01", "color": "#E63946" } ],
+  "AGVS": [ { "id": "AGV-01", "color": "#E63946", "heading": 0 } ],
   "GROUPS": {
     "G-A": { "name": "Deliver to A", "homeStart": "attach-full", "homeEnd": "none", "stops": [
       { "node": "P-H", "action": "move" }, { "node": "P-4", "action": "move" },
@@ -152,7 +152,7 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
   "CALLS": [ { "x": 852, "y": 130, "group": "G-A" } ],
   "HOME": { "slots": ["HS-1", "HS-2", "HS-3"] },
   "SIM": {
-    "agvSpeed": 120, "serviceTime": 3,
+    "agvSpeed": 120, "serviceTime": 3, "trolleyMode": "tow",
     "requests": [ { "t": 1, "group": "G-A" }, { "t": 7, "group": "G-A", "agv": "AGV-01" } ],
     "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
   }
