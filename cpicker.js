@@ -32,7 +32,7 @@ const state = {
   loops:    {},                           // id -> {name, agv, route:[nodeId]} — loop-mode allocation
   activeLoop:   null,
   calls:    [],                           // [{x,y,group}] — free-floating call buttons
-  sim: { agvSpeed: 120, serviceTime: 3, trolleyMode: 'tow', requests: [],
+  sim: { agvSpeed: 120, serviceTime: 3, trolleyMode: 'tow', fleetKind: 'agv', manpowerSpeed: 60, requests: [],
          autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } },
 
   mode: 'PATH',                           // PATH | STATION | GROUP | CALL
@@ -133,7 +133,7 @@ $('confirmClearOk').addEventListener('click', () => {
   state.stations = {}; state.calls = []; state.groups = {}; state.activeGroup = null;
   state.loops = {}; state.activeLoop = null;
   state.agvs = [{ id: 'AGV-01', color: AGV_COLORS[0], heading: 0 }];
-  state.sim = { agvSpeed: 120, serviceTime: 3, trolleyMode: 'tow', requests: [],
+  state.sim = { agvSpeed: 120, serviceTime: 3, trolleyMode: 'tow', fleetKind: 'agv', manpowerSpeed: 60, requests: [],
                 autoGenerate: { enabled: false, meanInterval: 6, seed: 1234 } };
   state.bgImage = null; state.imgW = 0; state.imgH = 0;
   state.pathSel = null; state.pathHistory = []; state.pathPtN = 1; state.edgeN = 1; state.stationN = 1; state.homeN = 1; state.machineN = 1; state.groupN = 0;
@@ -194,6 +194,8 @@ function loadIntoState(data) {
   state.sim = {
     agvSpeed: sim.agvSpeed || 120, serviceTime: sim.serviceTime ?? 3,
     trolleyMode: sim.trolleyMode === 'lurk' ? 'lurk' : 'tow',
+    fleetKind: sim.fleetKind === 'manpower' ? 'manpower' : 'agv',
+    manpowerSpeed: typeof sim.manpowerSpeed === 'number' ? sim.manpowerSpeed : 60,
     requests: (sim.requests || []).map(r => ({ t: +r.t || 0, group: r.group, agv: r.agv || null })),
     autoGenerate: { enabled: !!ag.enabled, meanInterval: ag.meanInterval || 6, seed: ag.seed ?? 1234 },
   };
@@ -949,6 +951,17 @@ function updateSimPanel() {
   });
   row('Service (s)', numInput(state.sim.serviceTime, v => { state.sim.serviceTime = Math.max(0, parseFloat(v) || 0); }));
   row('AGV px/s', numInput(state.sim.agvSpeed, v => { state.sim.agvSpeed = Math.max(1, parseFloat(v) || 120); }));
+  row('Fleet', (() => {
+    const sel = document.createElement('select');
+    sel.style.cssText = 'font-family:monospace;font-size:12px;padding:2px 4px;';
+    [['agv', 'AGV'], ['manpower', 'manpower']].forEach(([v, t]) => {
+      const o = document.createElement('option'); o.value = v; o.textContent = t;
+      if ((state.sim.fleetKind || 'agv') === v) o.selected = true; sel.appendChild(o);
+    });
+    sel.addEventListener('change', () => { state.sim.fleetKind = sel.value === 'manpower' ? 'manpower' : 'agv'; });
+    return sel;
+  })());
+  row('Walk px/s', numInput(state.sim.manpowerSpeed, v => { state.sim.manpowerSpeed = Math.max(1, parseFloat(v) || 60); }));
   row('Trolley', (() => {
     const sel = document.createElement('select');
     sel.style.cssText = 'font-family:monospace;font-size:12px;padding:2px 4px;';

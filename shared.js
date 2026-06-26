@@ -375,6 +375,8 @@ function normaliseLayout(data) {
   const sim = {
     mode,
     trolleyMode: rawSim.trolleyMode === 'lurk' ? 'lurk' : 'tow',   // group system: trolley behind (tow) vs on the AGV (lurk)
+    fleetKind:     rawSim.fleetKind === 'manpower' ? 'manpower' : 'agv',   // group system: render the fleet as AGVs or as human workers
+    manpowerSpeed: typeof rawSim.manpowerSpeed === 'number' ? rawSim.manpowerSpeed : 60,   // walking speed used when fleetKind === 'manpower'
     trainSize:   typeof rawSim.trainSize === 'number' ? rawSim.trainSize : 2,
     pairTimeout: typeof rawSim.pairTimeout === 'number' ? rawSim.pairTimeout : 200,
     store:       (rawSim.store && stations[rawSim.store] && stations[rawSim.store].role === 'store')

@@ -266,6 +266,8 @@ Shared fields:
   "agvSpeed": 120,        // px/s            (default 120)
   "serviceTime": 3,       // s dwell at action/swap/load/unload stops (default 3)
   "trolleyMode": "tow",   // "tow" (trolley behind, default) | "lurk" (trolley on the AGV)
+  "fleetKind": "agv",     // "agv" (default) | "manpower" — render/move the fleet as workers
+  "manpowerSpeed": 60,    // px/s walking speed used when fleetKind === "manpower" (default 60)
   "requests": [ … ],      // scripted timeline (see below)
   "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
 }
@@ -275,6 +277,14 @@ Shared fields:
   trolley behind the AGV on a hitch; **`lurk`** places it **on top of** the AGV at the AGV's rotation.
   Applies to the **group system's single trolley**; loop-mode 2-trolley trains always tow. In `lurk` the
   trolley adds no trailing length, so following AGVs keep only the bare-AGV gap.
+
+- `fleetKind` — a **whole-layout** toggle for the **group system** used to pitch AGV-vs-manual handling.
+  **`agv`** (default) renders the elongated AGV tag. **`manpower`** renders each unit as a top-down
+  human **worker pushing the cart** (the towed trolley is reused unchanged) moving at `manpowerSpeed`
+  instead of `agvSpeed` — so a slower, manual run can be shown beside the AGV run. `lurk` is ignored in
+  manpower mode (a worker always pushes the cart behind). Loop mode is unaffected.
+- `manpowerSpeed` — walking speed in **px/s** applied only when `fleetKind === "manpower"` (default 60,
+  i.e. deliberately slower than the 120 `agvSpeed` default; author-tunable).
 
 - `requests` is a **time-ordered script** of work. Its element shape **depends on mode**:
   - **Group mode:** `{ "t": <sec>, "group": "G-A", "agv": "AGV-01"? }` — at time `t`, enqueue group
@@ -365,7 +375,8 @@ The file is passed through a normalizer before use. To read a file the way the a
 - **GROUPS.homeStart/homeEnd:** clamp to the 5 valid home actions, else `none` (see §9 legacy note).
 - **CALLS:** keep only those with a valid `group` and numeric `x,y`.
 - **HOME.slots:** keep only ids that are real stations.
-- **SIM:** `agvSpeed→120`, `serviceTime→3`, `trainSize→2`, `pairTimeout→200`,
+- **SIM:** `agvSpeed→120`, `serviceTime→3`, `trainSize→2`, `pairTimeout→200`, `trolleyMode→tow`,
+  `fleetKind→agv`, `manpowerSpeed→60`,
   `autoGenerate.meanInterval→6`, `autoGenerate.seed→1234`; resolve `store` and `attach` (use the named
   station if it's a valid `store`/`attach`, else the first of that role, else null); parse `requests`
   per mode.

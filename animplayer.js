@@ -43,6 +43,8 @@ const state = {
   playing:        false,
   timeScale:      1,
   agvSpeed:       120,
+  fleetKind:      'agv',      // 'agv' | 'manpower' — render/move the group fleet as AGVs or workers
+  manpowerSpeed:  60,         // walking speed used when fleetKind === 'manpower'
   actionDuration: 1.5,
   showGrid:       true,
   showLabels:     true,
@@ -311,7 +313,8 @@ function updateWalker(w, dt) {
     // Collision handling is topological: only same-edge tailing and same-node
     // merges block. Parallel AGVs on other edges are ignored (graphics may
     // overlap — that's fine).
-    let limit = state.agvSpeed * dt;
+    const moveSpeed = state.fleetKind === 'manpower' ? state.manpowerSpeed : state.agvSpeed;
+    let limit = moveSpeed * dt;
     limit = Math.min(limit, Math.max(0, pathClampLimit(w, w.currentNode, targetId, dx, dy, distToTarget)));
 
     w.waiting = limit <= 0.05 && distToTarget > 0.6;
@@ -417,6 +420,8 @@ document.getElementById('loadJson').addEventListener('change', (e) => {
       engineMode   = layout.sim.mode === 'loop' ? 'loop' : 'group';
       activeEngine = engineMode === 'loop' ? LoopDispatch : Dispatch;
       state.trolleyMode = layout.sim.trolleyMode === 'lurk' ? 'lurk' : 'tow';
+      state.fleetKind     = layout.sim.fleetKind === 'manpower' ? 'manpower' : 'agv';
+      state.manpowerSpeed = layout.sim.manpowerSpeed;
       activeEngine.init(layout);
 
       const summary = engineMode === 'loop'
@@ -1013,6 +1018,41 @@ function drawAGV(sx, sy, heading, color = '#E63946') {
   drawHeadingArrow(ctx, sx, sy, heading, 16, '#ffffff', 2);
 }
 
+// Manpower body: a top-down human worker pushing a cart, drawn in place of the AGV
+// tag when fleetKind === 'manpower'. Oriented by heading and sized to sit inside the
+// AGV_LEN×AGV_SIZE footprint so fleet spacing/collision math is unchanged.
+function drawWorker(sx, sy, heading, color = '#E63946') {
+  const torsoLen = AGV_LEN * 0.55;   // shoulders→hips, along heading
+  const torsoWid = AGV_SIZE * 0.7;   // shoulder width, across heading
+  const headR    = AGV_SIZE * 0.26;
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.rotate(heading * Math.PI / 180);
+
+  // torso (oval) — narrower at the front, drawn first so head/arms sit on top
+  ctx.beginPath();
+  ctx.ellipse(0, 0, torsoLen / 2, torsoWid / 2, 0, 0, Math.PI * 2);
+  ctx.fillStyle = color; ctx.fill();
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+
+  // arms reaching toward the cart-pushing direction (front = +x)
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  for (const sgn of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(torsoLen * 0.1, sgn * torsoWid * 0.35);
+    ctx.lineTo(torsoLen * 0.55, sgn * torsoWid * 0.5);
+    ctx.stroke();
+  }
+
+  // head toward the front (heading direction)
+  ctx.beginPath();
+  ctx.arc(torsoLen * 0.5, 0, headR, 0, Math.PI * 2);
+  ctx.fillStyle = '#f4d9b8'; ctx.fill();          // skin tone, distinct from the body
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.restore();
+}
+
 // Loop mode: draw the 2-trolley train (AGV → FRONT → REAR) chained behind the AGV.
 function drawTrain(ax, ay, heading, train, color) {
   const rad  = heading * Math.PI / 180;
@@ -1252,7 +1292,7 @@ function drawScene(timestamp) {
     const { sx: ax, sy: ay } = imgToScreen(agv.agvPos.x, agv.agvPos.y, state.view);
     const rad = agv.agvHeading * Math.PI / 180;
 
-    const lurking = state.trolleyMode === 'lurk' && (!agv.train || !agv.train.length);
+    const lurking = state.trolleyMode === 'lurk' && state.fleetKind !== 'manpower' && (!agv.train || !agv.train.length);
 
     if (agv.train && agv.train.length) {
       drawTrain(ax, ay, agv.agvHeading, agv.train, agv.color);
@@ -1279,7 +1319,11 @@ function drawScene(timestamp) {
       drawTrolley(tx, ty, agv.agvHeading, agv.load);
     }
 
-    drawAGV(ax, ay, agv.agvHeading, agv.color);
+    if (state.fleetKind === 'manpower') {
+      drawWorker(ax, ay, agv.agvHeading, agv.color);
+    } else {
+      drawAGV(ax, ay, agv.agvHeading, agv.color);
+    }
 
     // lurk: the trolley rides on top of the AGV (same rotation), drawn over the body
     if (lurking && agv.load !== 'none') {

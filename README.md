@@ -49,6 +49,10 @@ The AGV is drawn as an elongated **tag** (1.5× long, a chamfered "nose" in the 
 The **trolley** is drawn by load — `none` (no trolley), `empty` (hollow), `full` (solid + cargo box) — and
 its placement follows `SIM.trolleyMode`: **`tow`** (default) trails it behind the AGV on a hitch;
 **`lurk`** sets it **on top of** the AGV at the same rotation (one mode per layout; group system).
+For pitching AGV-vs-manual handling, `SIM.fleetKind` flips the whole group layout between **`agv`**
+(default) and **`manpower`** — in manpower mode each unit is drawn as a **human worker pushing the cart**
+and moves at `SIM.manpowerSpeed` (default 60, slower than the AGV) so the manual run can be shown beside
+the AGV run.
 
 ---
 
@@ -99,7 +103,8 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
   its ID stays the same so call points keep working).
 - **Call:** click anywhere → choose a group to drop a call button; right-click a call marker removes it.
 - **Fleet & Sim panel:** number of AGVs, a per-AGV **initial heading** (0/90/180/270), service time, AGV
-  speed, the **Trolley** mode (`tow` / `lurk`), auto-generate (interval + seed), and a requests timeline
+  speed, the **Trolley** mode (`tow` / `lurk`), the **Fleet** kind (`AGV` / `manpower`) with its **Walk**
+  speed, auto-generate (interval + seed), and a requests timeline
   (`t  GROUP  [AGV]`, one per line) for repeatable recordings.
 
 ---
@@ -157,7 +162,7 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
   "CALLS": [ { "x": 852, "y": 130, "group": "G-A" } ],
   "HOME": { "slots": ["HS-1", "HS-2", "HS-3"] },
   "SIM": {
-    "agvSpeed": 120, "serviceTime": 3, "trolleyMode": "tow",
+    "agvSpeed": 120, "serviceTime": 3, "trolleyMode": "tow", "fleetKind": "agv", "manpowerSpeed": 60,
     "requests": [ { "t": 1, "group": "G-A" }, { "t": 7, "group": "G-A", "agv": "AGV-01" } ],
     "autoGenerate": { "enabled": false, "meanInterval": 6, "seed": 1234 }
   }
@@ -173,7 +178,7 @@ Floor plan image + Layout Picker  →  coords.json  →  Animation Player
 | `AGVS[]` | `{ id, color, heading }`. `heading` (one of `0 / 90 / 180 / 270`, default `0`) is the AGV's **initial parked facing**; once moving it auto-faces travel. |
 | `CALLS[]` | `{ x, y, group }` → a free-floating on-canvas call button. |
 | `HOME.slots[]` | Home-station ids, one slot per AGV (**#AGVs = #home slots**; AGV *i* parks at slot *i*). |
-| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`, and `trolleyMode` (`tow` default, or `lurk` — see below). Loop mode adds `mode:"loop"`, `trainSize` (trolleys per train, default 2), `pairTimeout` (seconds a lone call waits before a single trip, default 200), and either `attach` (loops model — shared load node) or `store` (legacy zone model). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
+| `SIM` | Playback config: `agvSpeed`, `serviceTime`, `requests` timeline, `autoGenerate`, `trolleyMode` (`tow` default, or `lurk` — see below), and `fleetKind` (`agv` default, or `manpower` — renders the group fleet as workers moving at `manpowerSpeed`, default 60). Loop mode adds `mode:"loop"`, `trainSize` (trolleys per train, default 2), `pairTimeout` (seconds a lone call waits before a single trip, default 200), and either `attach` (loops model — shared load node) or `store` (legacy zone model). In loop mode each `requests[]` entry is `{ t, machine, type }` instead of `{ t, group, agv }`. |
 | `LOOPS` | Loops model only: `id → { name, agv, route:[nodeId…], pair, pairTimeout }` — an owning AGV, an explicit ordered route (corners + machines), and pairing policy (`pair` default `true`; `pairTimeout` seconds, default `15`). Its presence selects the loops engine over the legacy zone engine. |
 
 > Legacy files using `CALL_STATIONS` and `pickup/release/exchange` still load (converted automatically).
